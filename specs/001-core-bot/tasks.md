@@ -424,4 +424,7 @@ Order is dependency order. Check a task only when its acceptance check passes in
 
 | Date | Task | Status | Notes |
 |---|---|---|---|
+| 2026-10-31 | T-049/T-050/T-053 | done | Image 61.3 MB compressed, healthy container, `/livez` and `/healthz` 200, `/metrics` exposed; ownership init service added. |
+| 2026-10-31 | T-051 | done | First CI run green (quality + docker); two CI-only fixes (gitleaks false positive, trivy tag). |
+| 2026-10-31 | T-054 | in progress | Live run exposed two bugs (surrogate chat id, confirmation encoding), both fixed and pushed; awaiting one `sent` row + restart evidence. |
 | 2026-10-31 | T-000 | blocked | Awaiting approval to run `uv lock` / `uv sync` (network). |

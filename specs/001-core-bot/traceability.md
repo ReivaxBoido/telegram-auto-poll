@@ -80,3 +80,17 @@ PRAGMAs, and repository tests. Full matrix: `tests/unit/test_validation.py`,
    plugin, and a CI run were unavailable; the live T-054 check also needs the dedicated bot token.
 7. The Dockerfile pins the `python:3.12-slim` tag, not a digest; CI actions use version tags, not
    commit SHAs (both flagged by the spec, awaiting an offline-verifiable pin update).
+
+## Live-check findings (T-054)
+
+Two production-only defects were found by the live run and fixed before G4:
+
+1. **Wrong chat id on send** — `deliveries.chat_id` references the `chats.id` surrogate, but
+   `sendPoll` received that surrogate instead of `chats.telegram_chat_id` (“Chat not found”). Fixed in
+   `services/delivery_service.py`; asserted by the payload and pacer tests.
+2. **Confirmation buttons encoded no entity** — `confirmation_keyboard` produced
+   `v1:w:confirm:<id>` while the handler expects `<entity>_<id>`, so `/sendnow`, `/removechat`, and
+   `/delete_schedule` confirmations were rejected. Fixed in `bot/keyboards.py` and locked by a
+   producer/consumer test that takes the real button data and feeds it to `handle_callback`.
+
+Both fixes are on PR #2 with CI green.

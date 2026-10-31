@@ -379,5 +379,5 @@ question:
 |---|---|---|---|---|
 | G1 | Clarifications (§14) | @ReivaxBoido | 2026-10-31 | issue #1, comment transcribed from structured Q&A |
 | G2 | `spec.md`, `plan.md`, `tasks.md` | @ReivaxBoido | 2026-10-31 | issue #1, G2 record comment |
-| G3 | Working tree, `traceability.md`, local gates, container build | @ReivaxBoido | 2026-10-31 | issue #1 comment 6536596064 (request); approval message: "approve" |
+| G3 | PR #2 (commit `e9325e0`), working tree, `traceability.md`, local + CI gates, container run | @ReivaxBoido | 2026-10-31 | issue #1 comment 6536596064 (request); approval messages: "approve", then "g3 approved" |
 | G4 | Reconciliation | | | |
