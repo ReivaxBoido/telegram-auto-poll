@@ -1063,3 +1063,23 @@ async def test_an_unexpected_error_without_a_chat_is_not_replied_to(
     await handle_command(SimpleNamespace(message=None), ctx)
 
     assert responder.sent == []
+
+
+async def test_the_sendnow_button_matches_the_callback_handler(
+    seed: Seed, factory: async_sessionmaker[AsyncSession]
+) -> None:
+    from telegram_auto_poll.bot.callbacks import decode
+
+    ctx, responder, _, _ = build(factory)
+    await sendnow(message(f"/sendnow {seed.poll_id}"), ctx)
+    keyboard = responder.sent[-1][2]
+    assert keyboard is not None
+    data = str(keyboard.inline_keyboard[0][0].callback_data)
+    assert decode(data).argument == f"send_{seed.poll_id}"
+
+    await handle_callback(callback(data), ctx)
+
+    assert "queued 1" in responder.last
+    async with unit_of_work(factory) as repos:
+        counts = await repos.deliveries.counts()
+    assert counts[DeliveryStatus.PENDING] == 1

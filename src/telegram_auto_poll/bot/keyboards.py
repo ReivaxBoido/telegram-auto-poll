@@ -52,7 +52,7 @@ def confirmation_keyboard(
     return build_keyboard(
         [
             [
-                (confirm_label, encode(namespace, confirm_action, entity_id)),
+                (confirm_label, encode(namespace, confirm_action, f"{entity}_{entity_id}")),
                 (cancel_label, encode("w", "cancel", entity)),
             ]
         ]

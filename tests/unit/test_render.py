@@ -222,7 +222,7 @@ def test_confirmation_keyboard_encodes_the_entity_id() -> None:
     )
 
     confirm, cancel = keyboard.inline_keyboard[0]
-    assert decode(str(confirm.callback_data)) == decode("v1:p:sendnow:12")
+    assert decode(str(confirm.callback_data)) == decode("v1:p:sendnow:poll_12")
     assert decode(str(cancel.callback_data)).action == "cancel"
 
 
