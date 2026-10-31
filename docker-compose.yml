@@ -1,0 +1,64 @@
+services:
+  permissions:
+    image: ghcr.io/reivaxboido/telegram-auto-poll:${IMAGE_TAG:-latest}
+    container_name: telegram-auto-poll-permissions
+    user: "0:0"
+    entrypoint: ["sh", "-c", "chown -R 10001:10001 /data"]
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+    volumes:
+      - poll-data:/data
+
+  bot:
+    image: ghcr.io/reivaxboido/telegram-auto-poll:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-dev}
+        BUILD_SHA: ${BUILD_SHA:-unknown}
+    container_name: telegram-auto-poll
+    restart: unless-stopped
+    depends_on:
+      permissions:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /data
+      DATABASE_URL: sqlite+aiosqlite:////data/telegram-auto-poll.db
+      HEALTH_HOST: 0.0.0.0
+      HEALTH_PORT: "8080"
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    volumes:
+      - poll-data:/data
+    ports:
+      - "127.0.0.1:8080:8080"
+    stop_grace_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+volumes:
+  poll-data:

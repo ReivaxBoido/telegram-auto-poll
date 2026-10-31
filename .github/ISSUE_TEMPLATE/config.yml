@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Project constitution and SDD workflow
+    url: https://github.com/ReivaxBoido/telegram-auto-poll/blob/main/CONSTITUTION.md
+    about: Read the engineering rules and the 17-step workflow before opening an issue.
+  - name: Operations runbook
+    url: https://github.com/ReivaxBoido/telegram-auto-poll/blob/main/docs/runbook.md
+    about: Deployment, backup, restore, token rotation, and incident procedures.
