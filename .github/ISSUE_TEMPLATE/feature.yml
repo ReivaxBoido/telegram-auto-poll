@@ -1,0 +1,82 @@
+name: Feature request
+description: Propose a feature or material change. Start here before writing a spec.
+title: "[Feature] "
+labels: ["feature", "needs-spec"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read `CONSTITUTION.md` §12 before submitting. A feature needs a spec under `specs/` and a human
+        G2 approval before any production code is written.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem exists today, for whom, and what is the cost of not solving it?
+      placeholder: As an admin, I cannot ... which means ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe observable behavior, not implementation. Include acceptance criteria.
+      placeholder: |
+        - The bot can ...
+        - Given ..., when ..., then ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals
+      description: What is explicitly out of scope for this change?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches, including doing nothing.
+    validations:
+      required: false
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact assessment
+      description: Data model, migrations, Telegram UX, security/privacy, observability, operations.
+      placeholder: |
+        - Data:
+        - UX:
+        - Security:
+        - Observability:
+        - Deployment/rollback:
+    validations:
+      required: true
+
+  - type: textarea
+    id: open_questions
+    attributes:
+      label: Open questions
+      description: Anything that must be answered before G1/G2. Silence is not an answer.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: SDD checklist
+      options:
+        - label: I have read `CONSTITUTION.md` and the relevant ADRs.
+          required: true
+        - label: This issue is scoped to one feature or a small, coherent change.
+          required: true
+        - label: I understand that no production code is written before G2 approval.
+          required: true
+        - label: I will create `specs/NNN-<slug>/` from the templates.
+          required: true
