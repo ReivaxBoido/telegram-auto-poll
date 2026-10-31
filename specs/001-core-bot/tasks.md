@@ -380,7 +380,7 @@ Order is dependency order. Check a task only when its acceptance check passes in
   - Acceptance: `docker compose config` valid; healthcheck reaches `/healthz`.
   - Covers: FR-138, §15.2
 
-- [ ] **T-051** (ops) Add the CI workflow.
+- [x] **T-051** (ops) Add the CI workflow.
   - Files: `.github/workflows/ci.yml`, `.github/dependabot.yml`
   - Contents: format, lint, mypy, pytest with coverage, gitleaks, bandit, pip-audit, Docker build,
     Trivy, migration check on empty DB, PR title/spec link check; least-privilege permissions; actions
