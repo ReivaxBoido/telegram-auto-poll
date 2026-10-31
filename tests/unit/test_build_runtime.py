@@ -188,3 +188,20 @@ async def test_main_returns_failure_when_startup_raises(
     monkeypatch.setattr("telegram_auto_poll.app.build_runtime", boom)
 
     assert main(settings(tmp_path)) == 1  # type: ignore[arg-type]
+
+
+async def test_the_retention_cron_runs_daily_at_0315_utc(tmp_path: Path) -> None:
+    runtime = build_runtime(settings(tmp_path), clock=FakeClock(FIXED_NOW))  # type: ignore[arg-type]
+    backend = runtime.scheduler._backend  # type: ignore[attr-defined]
+    job = backend._scheduler.get_job("retention-daily")
+
+    assert job is not None
+    trigger = str(job.trigger)
+    assert "hour='3'" in trigger
+    assert "minute='15'" in trigger
+    assert "retention-daily" not in backend.jobs()
+
+    await runtime.on_start()  # type: ignore[misc]
+    await job.func()
+    await job.func()
+    await runtime.on_stop()  # type: ignore[misc]

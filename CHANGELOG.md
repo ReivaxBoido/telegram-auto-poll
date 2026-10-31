@@ -78,6 +78,9 @@ All notable changes to this project are documented here. The format follows
   container reports healthy, `/livez` and `/healthz` return 200, and `/metrics` exposes the `tap_*`
   series. Added a one-shot `permissions` service so the non-root user can write the `/data` volume.
 
+- Retention is now scheduled: a daily 03:15 UTC APScheduler cron job runs `RetentionService`, records
+  the deleted-row counters, and checkpoints the WAL; the planner ignores non-date jobs.
+
 ### Changed
 
 - SPEC-001 status moved from `Draft` to `Approved`; no production code existed at G2.
