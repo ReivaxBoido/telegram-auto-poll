@@ -403,7 +403,7 @@ Order is dependency order. Check a task only when its acceptance check passes in
     allowed set; steady-state RSS at reference load is ≤ 256 MB and recorded.
   - Covers: NFR-101, NFR-108, §11.6
 
-- [ ] **T-054** (test) Live end-to-end check with the dedicated test bot and chat.
+- [x] **T-054** (test) Live end-to-end check with the dedicated test bot and chat.
   - Steps: start Compose with the test token; `/addchat` the test group; `/newpoll` a one-off two
     minutes ahead; confirm exactly one poll with the expected question/options; restart the container
     during the window and confirm no duplicate and no late send beyond grace; check `/status`,

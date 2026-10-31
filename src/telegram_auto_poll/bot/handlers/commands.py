@@ -219,7 +219,8 @@ async def status(update: object, ctx: HandlerContext) -> None:
         f"chats: {chats} active",
         f"polls: {polls} active",
         f"schedules: {len(schedules)} active",
-        f"deliveries: {deliveries}",
+        "deliveries: "
+        + ", ".join(f"{status.value} {count}" for status, count in deliveries.items()),
     ]
     upcoming = [
         run for schedule in schedules for run in next_occurrences(schedule, after=now, count=1)

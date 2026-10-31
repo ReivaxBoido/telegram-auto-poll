@@ -213,6 +213,8 @@ async def test_status_reports_counts_and_next_runs(
     assert "database: ok" in responder.last
     assert "chats: 1 active" in responder.last
     assert "polls: 1 active" in responder.last
+    assert "deliveries: pending 0" in responder.last
+    assert "DeliveryStatus" not in responder.last
     assert "next runs:" in responder.last
 
 
