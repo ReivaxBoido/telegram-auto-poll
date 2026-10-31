@@ -22,11 +22,11 @@ passes locally and in CI.
 
 ## Phase 2 — Engine and rendering
 
-- [ ] **T-205** (test) Engine button events.
+- [x] **T-205** (test) Engine button events.
   - Files: `tests/unit/test_wizard_engine.py`
   - Cases: weekday toggle/clear; target page; toggles; option removal; button-only path.
   - Covers: FR-202, FR-205, FR-206, FR-209, FR-210, FR-212
-- [ ] **T-206** (feat) Add `WEEKDAY`/`PAGE` events and state fields.
+- [x] **T-206** (feat) Add `WEEKDAY`/`PAGE` events and state fields.
   - Files: `bot/wizards/{states,engine}.py`
   - Covers: FR-205, FR-209
 - [ ] **T-207** (test) Numbered preview and chat-name labels.

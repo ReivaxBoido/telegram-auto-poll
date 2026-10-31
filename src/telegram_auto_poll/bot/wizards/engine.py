@@ -308,6 +308,10 @@ def _multiple(state: WizardState, action: WizardInput) -> Transition:
 
 
 def _targets(state: WizardState, action: WizardInput, context: WizardContext) -> Transition:
+    if action.kind is WizardEvent.PAGE:
+        if not isinstance(action.value, int):
+            return _stay(state, UNDERSTOOD)
+        return _prompt(replace(state, chat_page=max(action.value, 1), error=None))
     if action.kind is WizardEvent.TOGGLE:
         chat_id = _target_id(action)
         if chat_id is None or chat_id not in context.active_chat_ids:
@@ -342,6 +346,12 @@ def _schedule_kind(state: WizardState, action: WizardInput) -> Transition:
 
 
 def _weekdays(state: WizardState, action: WizardInput) -> Transition:
+    if action.kind is WizardEvent.WEEKDAY:
+        if not isinstance(action.value, int) or not 1 <= action.value <= 7:
+            return _stay(state, "weekdays must be between 1 and 7")
+        selected = set(state.weekdays)
+        selected.symmetric_difference_update({action.value})
+        return _prompt(replace(state, weekdays=tuple(sorted(selected)), error=None))
     text = _text(action)
     if action.kind is not WizardEvent.TEXT or text is None:
         return _stay(state, UNDERSTOOD)

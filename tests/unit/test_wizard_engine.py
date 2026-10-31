@@ -534,3 +534,35 @@ def test_end_step_rejects_text_without_a_value() -> None:
     transition = send(state(WizardStep.SCHEDULE_END), WizardEvent.TEXT, text=None)
 
     assert transition.state.error == UNDERSTOOD  # type: ignore[attr-defined]
+
+
+def test_weekday_buttons_toggle_selection() -> None:
+    start = state(WizardStep.SCHEDULE_WEEKDAYS, weekdays=())
+
+    selected = send(start, WizardEvent.WEEKDAY, value=3)
+    assert selected.state.weekdays == (3,)  # type: ignore[attr-defined]
+
+    cleared = send(selected.state, WizardEvent.WEEKDAY, value=3)  # type: ignore[attr-defined]
+    assert cleared.state.weekdays == ()  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("value", [0, 8, "x"])
+def test_a_weekday_outside_one_to_seven_is_rejected(value: object) -> None:
+    transition = send(state(WizardStep.SCHEDULE_WEEKDAYS), WizardEvent.WEEKDAY, value=value)
+
+    assert "between 1 and 7" in (transition.state.error or "")  # type: ignore[attr-defined]
+
+
+def test_target_pages_advance_and_never_go_below_one() -> None:
+    second = send(state(WizardStep.TARGETS), WizardEvent.PAGE, value=2)
+    assert second.state.chat_page == 2  # type: ignore[attr-defined]
+    assert second.state.step is WizardStep.TARGETS  # type: ignore[attr-defined]
+
+    clamped = send(second.state, WizardEvent.PAGE, value=0)  # type: ignore[attr-defined]
+    assert clamped.state.chat_page == 1  # type: ignore[attr-defined]
+
+
+def test_a_non_numeric_page_is_rejected() -> None:
+    transition = send(state(WizardStep.TARGETS), WizardEvent.PAGE, value="x")
+
+    assert transition.state.error == UNDERSTOOD  # type: ignore[attr-defined]

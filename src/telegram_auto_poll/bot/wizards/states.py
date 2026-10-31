@@ -47,6 +47,8 @@ class WizardEvent(StrEnum):
     TOGGLE = "toggle"
     NEXT = "next"
     SELECT = "select"
+    WEEKDAY = "weekday"
+    PAGE = "page"
     BACK = "back"
     CANCEL = "cancel"
     CONFIRM = "confirm"
@@ -74,6 +76,7 @@ class WizardState:
     is_anonymous: bool = True
     allows_multiple_answers: bool = False
     targets: frozenset[int] = field(default_factory=frozenset)
+    chat_page: int = 1
     schedule_kind: ScheduleKind | None = None
     weekdays: tuple[int, ...] = ()
     day_of_month: int | None = None
