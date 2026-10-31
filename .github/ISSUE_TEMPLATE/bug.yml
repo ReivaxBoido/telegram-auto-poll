@@ -1,0 +1,73 @@
+name: Bug report
+description: Report a defect with reproduction steps.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include bot tokens, private chat contents, or personal data. For security issues, use the
+        private reporting channel described in the repository security policy.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences describing the defect.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands, schedule, timezone, and chat type. Use fake IDs where possible.
+      placeholder: |
+        1. Create a poll with ...
+        2. Schedule it for ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include sanitized log lines with correlation IDs, not tokens or raw updates.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Output of `/version` or the image tag.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Host OS, Docker version, timezone, schedule kind, and whether DST is involved.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and specs.
+          required: true
+        - label: I removed secrets and personal data from logs and screenshots.
+          required: true
+        - label: I can reproduce this on the latest version.
+          required: true

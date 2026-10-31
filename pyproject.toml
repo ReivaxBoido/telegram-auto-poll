@@ -1,0 +1,128 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "telegram-auto-poll"
+version = "0.1.0"
+description = "Telegram bot that delivers saved polls on a schedule, administered by DM."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12,<3.13"
+authors = [{ name = "ReivaxBoido" }]
+keywords = ["telegram", "bot", "polls", "scheduler"]
+classifiers = [
+  "Private :: Do Not Upload",
+  "Programming Language :: Python :: 3.12",
+  "Typing :: Typed",
+]
+dependencies = [
+  "aiohttp>=3.9,<4",
+  "aiosqlite>=0.20,<1",
+  "alembic>=1.13,<2",
+  "apscheduler>=3.10,<4",
+  "prometheus-client>=0.20,<1",
+  "pydantic-settings>=2.4,<3",
+  "python-telegram-bot>=21.6,<23",
+  "sqlalchemy[asyncio]>=2.0.32,<3",
+  "tzdata>=2024.1",
+]
+
+[dependency-groups]
+dev = [
+  "bandit>=1.7.9",
+  "mypy>=1.11",
+  "pip-audit>=2.7",
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "pytest-cov>=5.0",
+  "ruff>=0.6.5",
+]
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+extend-exclude = ["src/telegram_auto_poll/db/migrations/versions"]
+
+[tool.ruff.lint]
+select = [
+  "E",
+  "F",
+  "I",
+  "N",
+  "UP",
+  "B",
+  "SIM",
+  "ASYNC",
+  "S",
+  "C4",
+  "PT",
+  "RUF",
+  "ANN",
+]
+ignore = [
+  # Formatter-compatible subset: line-length is enforced by `ruff format`, not by E501.
+  "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests are not application code: asserts and untyped fixtures are idiomatic there.
+"tests/**" = ["S101", "S105", "S106", "ANN", "PT011", "PT012"]
+# Alembic's generated template is not hand-written style.
+"db/migrations/env.py" = ["ANN", "E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["telegram_auto_poll", "tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+no_implicit_reexport = true
+warn_unused_ignores = true
+pretty = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "--strict-markers --strict-config -ra"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+  "integration: uses a temporary SQLite database and real migrations",
+]
+filterwarnings = [
+  # python-telegram-bot warns that RetryAfter.retry_after becomes a timedelta; the adapter
+  # already accepts both shapes.
+  "ignore:Deprecated since version v22.2:telegram.warnings.PTBDeprecationWarning",
+]
+
+[tool.coverage.run]
+branch = true
+# SQLAlchemy's async adapter executes sync callbacks inside a greenlet, and aiosqlite uses a
+# worker thread; coverage must be told about both or the PRAGMA listener looks unexecuted.
+concurrency = ["thread", "greenlet"]
+source = ["src/telegram_auto_poll"]
+omit = [
+  "src/telegram_auto_poll/__main__.py",
+  "src/telegram_auto_poll/db/migrations/versions/*",
+]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = false
+exclude_lines = [
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  'if __name__ == "__main__":',
+]
