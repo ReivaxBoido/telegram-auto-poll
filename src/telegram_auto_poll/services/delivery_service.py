@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from typing import cast
 
 from ..db.uow import Repositories, UnitOfWork
-from ..domain.entities import AuditEvent, Delivery, Poll, PollRequest
+from ..domain.entities import AuditEvent, Chat, Delivery, Poll, PollRequest
 from ..domain.enums import AuditAction, DeliveryStatus, SkipReason, Trigger
 from ..domain.errors import ConflictError, DeliveryError, NotFoundError, ValidationError
 from ..domain.ports import AdminNotifier, Clock, Pacer, PollSender
@@ -199,8 +199,8 @@ class DeliveryService:
         if isinstance(context, SkipReason):
             return await self._skip(delivery_id, context, delivery.attempt_count, now)
 
-        poll, chat_active = context
-        if not chat_active:
+        poll, chat = context
+        if chat is None or not chat.is_active:
             return await self._skip(
                 delivery_id, SkipReason.CHAT_INACTIVE, delivery.attempt_count, now
             )
@@ -209,9 +209,10 @@ class DeliveryService:
                 delivery_id, SkipReason.POLL_ARCHIVED, delivery.attempt_count, now
             )
 
-        await self._pacer.acquire(delivery.chat_id)
+        # Deliveries reference the surrogate chats.id; Telegram needs the real chat id.
+        await self._pacer.acquire(chat.telegram_chat_id)
         request = PollRequest(
-            chat_id=delivery.chat_id,
+            chat_id=chat.telegram_chat_id,
             question=poll.question,
             options=poll.options,
             description=poll.description,
@@ -234,14 +235,13 @@ class DeliveryService:
             attempts=delivery.attempt_count,
         )
 
-    async def _load_context(self, delivery: Delivery) -> tuple[Poll, bool] | SkipReason:
+    async def _load_context(self, delivery: Delivery) -> tuple[Poll, Chat | None] | SkipReason:
         async with self._uow() as repos:
             poll = await repos.polls.get(delivery.poll_id)
             if poll is None:
                 return SkipReason.POLL_MISSING
             chat = await repos.chats.get(delivery.chat_id)
-            active = chat is not None and chat.is_active
-        return poll, active
+        return poll, chat
 
     async def _handle_error(
         self,

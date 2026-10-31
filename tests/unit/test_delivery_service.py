@@ -264,13 +264,13 @@ async def test_dispatch_sends_the_exact_poll_payload(
 
     assert [outcome.status for outcome in outcomes] == [DeliveryStatus.SENT]
     request = sender.requests[0]
-    assert request.chat_id == seed.chat_id
+    assert request.chat_id == seed.chat.telegram_chat_id
     assert request.question == seed.poll.question
     assert request.options == seed.poll.options
     assert request.description == seed.poll.description
     assert request.is_anonymous is True
     assert request.allows_multiple_answers is False
-    assert pacer.chats == [seed.chat_id]
+    assert pacer.chats == [seed.chat.telegram_chat_id]
     rows = await delivery_rows(seed, factory)
     assert rows[0][1] == DeliveryStatus.SENT.value
     assert rows[0][4] is not None
