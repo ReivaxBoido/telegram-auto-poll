@@ -20,6 +20,8 @@ from types import TracebackType
 from typing import Protocol, cast
 
 from aiohttp import web
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
 from telegram import Bot
 from telegram.ext import Application
 
@@ -37,7 +39,14 @@ from .db.uow import unit_of_work
 from .domain.ports import Clock
 from .observability.health import HealthService, create_health_app
 from .observability.metrics import Metrics
-from .scheduler.engine import ApschedulerBackend, SchedulerEngine, SchedulerHeartbeat
+from .scheduler.engine import (
+    RETENTION_HOUR_UTC,
+    RETENTION_JOB_ID,
+    RETENTION_MINUTE_UTC,
+    ApschedulerBackend,
+    SchedulerEngine,
+    SchedulerHeartbeat,
+)
 from .scheduler.planner import PlannedSchedule, ScheduleJobPlanner
 from .scheduler.worker import DeliveryWorker
 from .services.chat_service import ChatService
@@ -45,6 +54,7 @@ from .services.delivery_service import DeliveryService
 from .services.poll_service import PollService
 from .services.rate_limiter import RateLimiter
 from .services.recovery_service import RecoveryService
+from .services.retention_service import RetentionService
 from .services.schedule_service import ScheduleService
 
 logger = logging.getLogger(__name__)
@@ -229,6 +239,11 @@ class _BotNotifier:
                 logger.exception("admin alert failed")
 
 
+async def _checkpoint_wal(engine: AsyncEngine) -> None:
+    async with engine.connect() as connection:
+        await connection.execute(text("PRAGMA wal_checkpoint(TRUNCATE)"))
+
+
 def _database_path(settings: Settings) -> Path:
     return Path(settings.database_url.removeprefix("sqlite+aiosqlite:///"))
 
@@ -325,6 +340,29 @@ def build_runtime(
         polling = PtbPollingRunner(
             build_application(token=settings.telegram_bot_token.get_secret_value(), ctx=context)
         )
+
+    retention = RetentionService(
+        uow=uow,
+        clock=resolved_clock,
+        checkpoint=lambda: _checkpoint_wal(engine),
+        retention_days=settings.retention_days,
+    )
+
+    async def run_retention() -> None:
+        result = await retention.run()
+        metrics.retention_deleted.labels(table="deliveries").inc(result.deliveries)
+        metrics.retention_deleted.labels(table="audit_events").inc(result.audit_events)
+        logger.info(
+            "retention_completed",
+            extra={"deliveries": result.deliveries, "audit_events": result.audit_events},
+        )
+
+    backend.add_cron(
+        RETENTION_JOB_ID,
+        hour=RETENTION_HOUR_UTC,
+        minute=RETENTION_MINUTE_UTC,
+        callback=run_retention,
+    )
 
     recovery = RecoveryService(
         uow=uow,

@@ -16,9 +16,12 @@ from typing import Protocol
 from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore[import-untyped]
 
 from ..services.delivery_service import TickOutcome
-from .planner import ScheduleJobPlanner
+from .planner import JOB_PREFIX, ScheduleJobPlanner
 
 SAFETY_TICK_ID = "safety-tick"
+RETENTION_JOB_ID = "retention-daily"
+RETENTION_HOUR_UTC = 3
+RETENTION_MINUTE_UTC = 15
 
 #: A due job that is late by more than this is left to the safety tick, which applies the grace
 #: window and records a skip instead of sending.
@@ -65,6 +68,16 @@ class SchedulerBackend(Protocol):
     def remove(self, job_id: str) -> None:
         raise NotImplementedError
 
+    def add_cron(
+        self,
+        job_id: str,
+        *,
+        hour: int,
+        minute: int,
+        callback: Callable[[], Awaitable[object]],
+    ) -> None:
+        raise NotImplementedError
+
 
 class ApschedulerBackend:
     """APScheduler 3.x ``AsyncIOScheduler`` adapter.
@@ -101,7 +114,7 @@ class ApschedulerBackend:
         return {
             job.id: job.next_run_time
             for job in self._scheduler.get_jobs()
-            if job.id != SAFETY_TICK_ID and job.next_run_time is not None
+            if job.id.startswith(JOB_PREFIX) and job.next_run_time is not None
         }
 
     def add(self, job_id: str, run_at: datetime) -> None:
@@ -117,6 +130,27 @@ class ApschedulerBackend:
     def remove(self, job_id: str) -> None:
         if self._scheduler.get_job(job_id) is not None:
             self._scheduler.remove_job(job_id)
+
+    def add_cron(
+        self,
+        job_id: str,
+        *,
+        hour: int,
+        minute: int,
+        callback: Callable[[], Awaitable[object]],
+    ) -> None:
+        """Register a daily UTC cron job outside the date-job set the planner owns."""
+        self._scheduler.add_job(
+            callback,
+            "cron",
+            hour=hour,
+            minute=minute,
+            timezone=UTC,
+            id=job_id,
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+        )
 
     async def _run_tick(self) -> None:
         await self._on_tick()

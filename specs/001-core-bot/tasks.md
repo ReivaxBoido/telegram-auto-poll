@@ -233,7 +233,7 @@ Order is dependency order. Check a task only when its acceptance check passes in
   - Acceptance: batch counts asserted.
   - Covers: FR-134, FR-135
 
-- [ ] **T-031** (feat) Implement audit and retention services.
+- [x] **T-031** (feat) Implement audit and retention services.
   - Files: `src/telegram_auto_poll/services/{audit_service,retention_service}.py`
   - Acceptance: T-030 passes; retention registered as a 03:15 UTC cron job.
   - Covers: FR-134, FR-135
