@@ -55,7 +55,9 @@ the 8-row keyboard limit), and require at least one target. | P0 | Given 9 chats
 | FR-207 | Anonymity and multiple-answer MUST be toggled by buttons that show their current state. | P1 | Label shows Anonymous/On or Single/Off. |
 | FR-208 | Schedule kind MUST be chosen with buttons: daily, weekly, monthly, one-off, save without schedule. | P0 | Each choice advances to the right step. |
 | FR-209 | Weekly weekdays MUST use seven toggle buttons (Mon–Sun) plus Done, enforcing 1–7 distinct days. | P1 | All seven can be toggled; empty Done re-prompts. |
-| FR-210 | Options MUST offer Add another (then typed text), Remove for each option, and Done enforcing 2–12 unique options. | P1 | Remove deletes only that option; Done with one re-prompts. |
+| FR-210 | Options MUST list one per numbered line, offer Remove for each option, and Done enforcing
+2–12 unique options. Typing a message adds the option, so no Add button is shown (amended
+2026-11-01 after live feedback). | P1 | Remove deletes only that option; Done with one re-prompts. |
 | FR-211 | The preview MUST show a numbered option list, the target chat names, the schedule summary, and next five runs. | P0 | Each option is on its own numbered line. |
 | FR-212 | Text shortcuts (`next`, `done`, `back`, `toggle`, `skip`, `confirm`, chat ids) MUST keep working as a fallback. | P2 | Typed `back` still moves back. |
 | FR-213 | Every callback MUST be ≤ 64 bytes, versioned `v1`, and round-trip through the codec. | P0 | Codec tests cover every generated key. |
@@ -79,7 +81,7 @@ the 8-row keyboard limit), and require at least one target. | P0 | Given 9 chats
 | 7+ chats | Paginate 6 per page; selection persists across pages. |
 | Zero active chats | Targets step explains `/addchat` and keeps Cancel/Back. |
 | Removal of a selected target | Selection cleared; Done re-checks ≥1. |
-| 12 options | Add-another button hidden; Done remains. |
+| 12 options | Remove buttons remain; Done remains. |
 | One option | Done re-prompts with the constraint. |
 | Stale callback after TTL | Answer “wizard expired”, discard session. |
 | Callback for another admin | Refused by the authorizer; no state change. |

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from telegram import InlineKeyboardMarkup
 
 from telegram_auto_poll.bot.auth import AdminGuard, rate_limit_message
+from telegram_auto_poll.bot.callbacks import wizard_action
 from telegram_auto_poll.bot.handlers.commands import (
     HandlerContext,
     addchat,
@@ -937,7 +938,7 @@ async def test_removing_an_option_from_the_session(
         WizardState(admin_user_id=ADMIN_USER_ID, step=WizardStep.OPTIONS, options=("A", "B"))
     )
 
-    await handle_callback(callback("v1:w:option_remove:0"), ctx)
+    await handle_callback(callback(wizard_action("opt", 0)), ctx)
 
     session = ctx.wizards.get(ADMIN_USER_ID)
     assert session is not None
@@ -950,12 +951,12 @@ async def test_removing_an_option_outside_the_options_step_is_refused(
 ) -> None:
     ctx, responder, _, _ = build(factory)
 
-    await handle_callback(callback("v1:w:option_remove:0"), ctx)
+    await handle_callback(callback(wizard_action("opt", 0)), ctx)
 
     ctx.wizards.put(
         WizardState(admin_user_id=ADMIN_USER_ID, step=WizardStep.OPTIONS, options=("A",))
     )
-    await handle_callback(callback("v1:w:option_remove:5"), ctx)
+    await handle_callback(callback(wizard_action("opt", 5)), ctx)
 
     assert responder.answers == [
         ("cb-1", "the wizard is no longer on options"),
@@ -1161,7 +1162,7 @@ async def test_target_pagination_and_add_option_callbacks(
 
     ctx.wizards.put(WizardState(admin_user_id=ADMIN_USER_ID, step=WizardStep.OPTIONS))
     await handle_callback(callback(wizard_action("add")), ctx)
-    assert responder.answers[-1][1] == "send the option text"
+    assert responder.answers[-1][1] == "unsupported action"
 
 
 async def test_a_wizard_callback_without_a_session_expires(
@@ -1222,3 +1223,41 @@ async def test_wizard_helpers_cover_missing_chats_and_refused_commits(
         await repos.chats.set_active(seed.chat_id, active=False, now=FIXED_NOW)
     await handle_callback(callback(wizard_action("create")), ctx)
     assert "not created" in responder.last
+
+
+def test_the_options_prompt_is_a_numbered_list() -> None:
+    from telegram_auto_poll.bot.handlers.commands import render_step
+    from telegram_auto_poll.bot.wizards.engine import WizardContext
+
+    context = WizardContext(
+        default_timezone="UTC", active_chat_ids=frozenset({CHAT}), now=FIXED_NOW
+    )
+    render = render_step(
+        WizardState(admin_user_id=1, step=WizardStep.OPTIONS, options=("one", "two")), context
+    )
+
+    assert "1. one" in render
+    assert "2. two" in render
+    assert "one, two" not in render
+
+
+async def test_the_real_remove_button_removes_the_option(
+    seed: Seed, factory: async_sessionmaker[AsyncSession]
+) -> None:
+    from telegram_auto_poll.bot.callbacks import decode
+
+    ctx, responder, _, _ = build(factory)
+    from telegram_auto_poll.bot.keyboards import wizard_keyboard
+
+    current = WizardState(admin_user_id=ADMIN_USER_ID, step=WizardStep.OPTIONS, options=("A", "B"))
+    ctx.wizards.put(current)
+    keyboard = wizard_keyboard(current)
+    data = str(keyboard.inline_keyboard[0][0].callback_data)
+    assert decode(data).action == "opt"
+
+    await handle_callback(callback(data), ctx)
+
+    session = ctx.wizards.get(ADMIN_USER_ID)
+    assert session is not None
+    assert session.options == ("B",)
+    assert responder.answers[-1] == ("cb-1", "removed")

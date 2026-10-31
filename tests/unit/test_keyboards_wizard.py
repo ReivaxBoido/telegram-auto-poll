@@ -119,7 +119,7 @@ def test_a_long_title_is_truncated_but_the_id_survives() -> None:
     assert "\u2026" in label
 
 
-def test_options_render_remove_buttons_and_hide_add_at_the_limit() -> None:
+def test_options_render_only_remove_buttons() -> None:
     keyboard = wizard_keyboard(state(WizardStep.OPTIONS, options=tuple("abcdefghijkl")))
 
     found = actions(keyboard)

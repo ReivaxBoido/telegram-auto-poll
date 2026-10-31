@@ -27,14 +27,15 @@ from ...services.poll_service import PollService
 from ...services.schedule_service import ScheduleService
 from ..auth import GENERIC_REFUSAL, AdminGuard, AuthDenial, command_name, rate_limit_message
 from ..callbacks import (
-    WIZARD_ADD_OPTION,
     WIZARD_ANONYMITY,
     WIZARD_BACK,
+    WIZARD_CANCEL,
     WIZARD_CONFIRM,
     WIZARD_DONE,
     WIZARD_KIND,
     WIZARD_MULTIPLE,
     WIZARD_NEXT,
+    WIZARD_OPTION_REMOVE,
     WIZARD_SKIP,
     WIZARD_TARGET,
     WIZARD_TARGET_PAGE,
@@ -577,8 +578,11 @@ def render_step(
     if step is WizardStep.DESCRIPTION:
         return _prompt("Send the description (up to 1024 characters), or send 'skip'.")
     if step is WizardStep.OPTIONS:
-        listed = ", ".join(state.options) or "(none yet)"
-        return _prompt(f"Options: {listed}\nSend the next option, or 'done' to continue.")
+        listed = (
+            "\n".join(f"  {index}. {option}" for index, option in enumerate(state.options, start=1))
+            or "  (none yet)"
+        )
+        return _prompt(f"Options:\n{listed}\nSend the next option, or press Done.")
     if step is WizardStep.ANONYMITY:
         value = "anonymous" if state.is_anonymous else "named"
         return _prompt(f"Current: {value}. Send 'toggle' to change, or 'next'.")
@@ -641,7 +645,6 @@ WIZARD_ACTIONS = frozenset(
         WIZARD_WEEKDAY,
         WIZARD_TARGET,
         WIZARD_TARGET_PAGE,
-        WIZARD_ADD_OPTION,
         WIZARD_CONFIRM,
     }
 )
@@ -846,10 +849,6 @@ async def handle_callback(update: object, ctx: HandlerContext) -> None:
             active_chat_ids=await _active_chats(ctx),
             now=ctx.clock.now(),
         )
-        if data.action == WIZARD_ADD_OPTION:
-            await ctx.responder.answer(callback_id, "send the option text")
-            await _send_prompt(ctx, chat_id, pending, context)
-            return
         await ctx.responder.answer(callback_id, "ok")
         await _advance_and_reply(
             ctx,
@@ -861,12 +860,12 @@ async def handle_callback(update: object, ctx: HandlerContext) -> None:
         )
         return
 
-    if data.namespace == "w" and data.action == "cancel":
+    if data.namespace == "w" and data.action == WIZARD_CANCEL:
         ctx.wizards.discard(actor)
         await ctx.responder.answer(callback_id, "cancelled")
         return
 
-    if data.namespace == "w" and data.action == "option_remove":
+    if data.namespace == "w" and data.action == WIZARD_OPTION_REMOVE:
         pending = ctx.wizards.get(actor)
         if pending is None or pending.step is not WizardStep.OPTIONS:
             await ctx.responder.answer(callback_id, "the wizard is no longer on options")

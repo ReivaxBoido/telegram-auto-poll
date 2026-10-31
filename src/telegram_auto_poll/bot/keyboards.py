@@ -9,7 +9,6 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from ..domain.entities import Chat
 from ..services.pagination import Page
 from .callbacks import (
-    WIZARD_ADD_OPTION,
     WIZARD_ANONYMITY,
     WIZARD_BACK,
     WIZARD_CANCEL,
@@ -150,8 +149,6 @@ def wizard_keyboard(
             for index in range(len(state.options))
         ]
         rows.extend([remove[index : index + 4] for index in range(0, len(remove), 4)])
-        if len(state.options) < 12:
-            rows.append([("\u2795 Add option", wizard_action(WIZARD_ADD_OPTION))])
         rows.append([("\u2714 Done", wizard_action(WIZARD_DONE)), *_navigation()])
     elif step is WizardStep.ANONYMITY:
         label = "Anonymous: \u2705" if state.is_anonymous else "Anonymous: \u274c"
