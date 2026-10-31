@@ -46,13 +46,13 @@ passes locally and in CI.
 - [x] **T-210** (feat) Attach keyboards and route callbacks.
   - Files: `bot/handlers/commands.py`
   - Covers: FR-201–FR-212
-- [ ] **T-211** (test) Integration: button-only creation on SQLite.
+- [x] **T-211** (test) Integration: button-only creation on SQLite.
   - Files: `tests/integration/test_wizard_buttons.py`
   - Covers: FR-202, FR-205, FR-210, FR-211
 
 ## Phase 4 — Docs and release
 
-- [ ] **T-212** (docs) Update README/runbook wording and CHANGELOG.
+- [x] **T-212** (docs) Update README/runbook wording and CHANGELOG.
 - [ ] **T-213** (test) Full gates + CI; live check with the test bot.
 - [ ] **T-214** (docs) Reconcile and request G3/G4.
 

@@ -944,6 +944,7 @@ async def test_removing_an_option_from_the_session(
     assert session is not None
     assert session.options == ("B",)
     assert responder.answers[-1] == ("cb-1", "removed")
+    assert responder.sent[-1][2] is not None
 
 
 async def test_removing_an_option_outside_the_options_step_is_refused(
@@ -1261,3 +1262,4 @@ async def test_the_real_remove_button_removes_the_option(
     assert session is not None
     assert session.options == ("B",)
     assert responder.answers[-1] == ("cb-1", "removed")
+    assert responder.sent[-1][2] is not None

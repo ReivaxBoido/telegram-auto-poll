@@ -889,7 +889,7 @@ async def handle_callback(update: object, ctx: HandlerContext) -> None:
             active_chat_ids=await _active_chats(ctx),
             now=ctx.clock.now(),
         )
-        await ctx.responder.send(chat_id, render_step(updated, option_context))
+        await _send_prompt(ctx, chat_id, updated, option_context)
         return
 
     if data.namespace == "w" and data.action == "confirm" and data.argument:
