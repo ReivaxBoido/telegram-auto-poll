@@ -29,21 +29,21 @@ passes locally and in CI.
 - [x] **T-206** (feat) Add `WEEKDAY`/`PAGE` events and state fields.
   - Files: `bot/wizards/{states,engine}.py`
   - Covers: FR-205, FR-209
-- [ ] **T-207** (test) Numbered preview and chat-name labels.
+- [x] **T-207** (test) Numbered preview and chat-name labels.
   - Files: `tests/unit/test_render.py`
   - Cases: 3 long options numbered; names instead of ids; 4,096 cap preserved.
   - Covers: FR-211, FR-215
-- [ ] **T-208** (feat) Renderers.
+- [x] **T-208** (feat) Renderers.
   - Files: `bot/render.py`
   - Covers: FR-211, FR-215
 
 ## Phase 3 — Handlers
 
-- [ ] **T-209** (test) Callback routing.
+- [x] **T-209** (test) Callback routing.
   - Files: `tests/unit/test_handlers.py`
   - Cases: each action; stale TTL; foreign admin; text fallback; button-only create.
   - Covers: FR-202, FR-206, FR-212
-- [ ] **T-210** (feat) Attach keyboards and route callbacks.
+- [x] **T-210** (feat) Attach keyboards and route callbacks.
   - Files: `bot/handlers/commands.py`
   - Covers: FR-201–FR-212
 - [ ] **T-211** (test) Integration: button-only creation on SQLite.

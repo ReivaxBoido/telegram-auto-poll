@@ -22,10 +22,30 @@ from ...domain.ports import Clock
 from ...domain.schedule_math import next_occurrences
 from ...services.chat_service import ChatService, parse_chat_id
 from ...services.delivery_service import DeliveryService
+from ...services.pagination import Page
 from ...services.poll_service import PollService
 from ...services.schedule_service import ScheduleService
 from ..auth import GENERIC_REFUSAL, AdminGuard, AuthDenial, command_name, rate_limit_message
-from ..keyboards import confirmation_keyboard, pagination_keyboard
+from ..callbacks import (
+    WIZARD_ADD_OPTION,
+    WIZARD_ANONYMITY,
+    WIZARD_BACK,
+    WIZARD_CONFIRM,
+    WIZARD_DONE,
+    WIZARD_KIND,
+    WIZARD_MULTIPLE,
+    WIZARD_NEXT,
+    WIZARD_SKIP,
+    WIZARD_TARGET,
+    WIZARD_TARGET_PAGE,
+    WIZARD_WEEKDAY,
+)
+from ..keyboards import (
+    WIZARD_CHAT_PAGE_SIZE,
+    confirmation_keyboard,
+    pagination_keyboard,
+    wizard_keyboard,
+)
 from ..render import (
     chat_line,
     empty_listing,
@@ -504,8 +524,14 @@ async def newpoll(update: object, ctx: HandlerContext) -> None:
         )
         return
 
-    ctx.wizards.put(WizardState(admin_user_id=admin, timezone=ctx.default_timezone))
-    await ctx.responder.send(chat_id, _prompt("Send the poll question (1-300 characters)."))
+    session = WizardState(admin_user_id=admin, timezone=ctx.default_timezone)
+    ctx.wizards.put(session)
+    context = WizardContext(
+        default_timezone=ctx.default_timezone,
+        active_chat_ids=await _active_chats(ctx),
+        now=ctx.clock.now(),
+    )
+    await _send_prompt(ctx, chat_id, session, context)
 
 
 def _wizard_input(state: WizardState, text: str) -> WizardInput:
@@ -538,7 +564,11 @@ async def _active_chats(ctx: HandlerContext) -> frozenset[int]:
         return frozenset(await repos.chats.active_ids())
 
 
-def render_step(state: WizardState, context: WizardContext) -> str:
+def render_step(
+    state: WizardState,
+    context: WizardContext,
+    chat_names: dict[int, str] | None = None,
+) -> str:
     """Render the prompt for the current wizard step."""
 
     step = state.step
@@ -599,6 +629,122 @@ def render_step(state: WizardState, context: WizardContext) -> str:
     return "\n".join(lines)
 
 
+WIZARD_ACTIONS = frozenset(
+    {
+        WIZARD_BACK,
+        WIZARD_NEXT,
+        WIZARD_DONE,
+        WIZARD_SKIP,
+        WIZARD_ANONYMITY,
+        WIZARD_MULTIPLE,
+        WIZARD_KIND,
+        WIZARD_WEEKDAY,
+        WIZARD_TARGET,
+        WIZARD_TARGET_PAGE,
+        WIZARD_ADD_OPTION,
+        WIZARD_CONFIRM,
+    }
+)
+
+
+def wizard_action_input(step: object, action: str, argument: str | None) -> WizardInput:
+    """Translate a wizard callback into the engine event for ``step``."""
+    if action == WIZARD_BACK:
+        return WizardInput(WizardEvent.BACK)
+    if action == WIZARD_SKIP:
+        return WizardInput(WizardEvent.SKIP)
+    if action in {WIZARD_ANONYMITY, WIZARD_MULTIPLE}:
+        return WizardInput(WizardEvent.TOGGLE)
+    if action == WIZARD_KIND:
+        return WizardInput(WizardEvent.SELECT, value=argument)
+    if action == WIZARD_WEEKDAY:
+        return WizardInput(WizardEvent.WEEKDAY, value=int(argument or 0))
+    if action == WIZARD_TARGET:
+        return WizardInput(WizardEvent.TOGGLE, value=int(argument or 0))
+    if action == WIZARD_TARGET_PAGE:
+        return WizardInput(WizardEvent.PAGE, value=int(argument or 1))
+    if action == WIZARD_CONFIRM:
+        return WizardInput(WizardEvent.CONFIRM)
+    if action == WIZARD_DONE:
+        event = WizardEvent.OPTION_DONE if step is WizardStep.OPTIONS else WizardEvent.NEXT
+        return WizardInput(event)
+    return WizardInput(WizardEvent.NEXT)
+
+
+async def _chat_page(ctx: HandlerContext, state: WizardState) -> object | None:
+    if state.step is not WizardStep.TARGETS:
+        return None
+    async with ctx.uow() as repos:
+        total = await repos.chats.count(active_only=True)
+        items = await repos.chats.list_all(
+            active_only=True,
+            limit=WIZARD_CHAT_PAGE_SIZE,
+            offset=(state.chat_page - 1) * WIZARD_CHAT_PAGE_SIZE,
+        )
+    return Page.create(items, number=state.chat_page, size=WIZARD_CHAT_PAGE_SIZE, total=total)
+
+
+async def _chat_names(ctx: HandlerContext, state: WizardState) -> dict[int, str]:
+    names: dict[int, str] = {}
+    async with ctx.uow() as repos:
+        for chat_id in state.targets:
+            chat = await repos.chats.get(chat_id)
+            if chat is not None:
+                names[chat_id] = chat.title
+    return names
+
+
+async def _send_prompt(
+    ctx: HandlerContext, chat_id: int, state: WizardState, context: WizardContext
+) -> None:
+    keyboard = wizard_keyboard(state, chat_page=await _chat_page(ctx, state))  # type: ignore[arg-type]
+    prompt = render_step(state, context, await _chat_names(ctx, state))
+    if state.error:
+        prompt = f"{state.error}\n\n{prompt}"
+    await ctx.responder.send(chat_id, prompt, keyboard=keyboard)
+
+
+async def _advance_and_reply(
+    ctx: HandlerContext,
+    chat_id: int,
+    admin: int,
+    pending: WizardState,
+    action: WizardInput,
+    context: WizardContext,
+) -> None:
+    transition = advance(pending, action, context=context)
+    if transition.effect is WizardEffect.COMMIT and transition.draft is not None:
+        draft = transition.draft
+        try:
+            created = await ctx.polls.create(
+                actor_user_id=admin,
+                question=draft.question,
+                options=draft.options,
+                target_chat_ids=draft.targets,
+                description=draft.description,
+                is_anonymous=draft.is_anonymous,
+                allows_multiple_answers=draft.allows_multiple_answers,
+                schedule=draft.schedule,
+            )
+        except DomainError as error:
+            ctx.wizards.put(pending)
+            await ctx.responder.send(chat_id, f"not created: {error}")
+            return
+        ctx.wizards.discard(admin)
+        suffix = f" with schedule #{created.schedule.id}" if created.schedule is not None else ""
+        await ctx.responder.send(chat_id, f"created poll #{created.poll.id}{suffix}")
+        return
+    if transition.effect is WizardEffect.CANCELLED:
+        ctx.wizards.discard(admin)
+        await ctx.responder.send(chat_id, "wizard cancelled")
+        return
+    ctx.wizards.put(transition.state)
+    if transition.effect is WizardEffect.IGNORED:
+        await ctx.responder.send(chat_id, "this wizard is already finished")
+        return
+    await _send_prompt(ctx, chat_id, transition.state, context)
+
+
 async def handle_wizard_message(update: object, ctx: HandlerContext) -> None:
     """Feed one plain-text message to the admin's wizard session."""
 
@@ -646,15 +792,7 @@ async def handle_wizard_message(update: object, ctx: HandlerContext) -> None:
         await ctx.responder.send(chat_id, "wizard cancelled")
         return
 
-    ctx.wizards.put(transition.state)
-    if transition.effect is WizardEffect.IGNORED:
-        await ctx.responder.send(chat_id, "this wizard is already finished")
-        return
-
-    prompt = render_step(transition.state, context)
-    if transition.state.error:
-        prompt = f"{transition.state.error}\n\n{prompt}"
-    await ctx.responder.send(chat_id, prompt)
+    await _advance_and_reply(ctx, chat_id, admin, pending, _wizard_input(pending, text), context)
 
 
 # --------------------------------------------------------------------------------------------
@@ -697,6 +835,31 @@ async def handle_callback(update: object, ctx: HandlerContext) -> None:
 
     chat_id = _callback_chat_id(update)
     actor = _callback_actor(update)
+
+    if data.namespace == "w" and data.action in WIZARD_ACTIONS:
+        pending = ctx.wizards.get(actor)
+        if pending is None:
+            await ctx.responder.answer(callback_id, "wizard expired")
+            return
+        context = WizardContext(
+            default_timezone=ctx.default_timezone,
+            active_chat_ids=await _active_chats(ctx),
+            now=ctx.clock.now(),
+        )
+        if data.action == WIZARD_ADD_OPTION:
+            await ctx.responder.answer(callback_id, "send the option text")
+            await _send_prompt(ctx, chat_id, pending, context)
+            return
+        await ctx.responder.answer(callback_id, "ok")
+        await _advance_and_reply(
+            ctx,
+            chat_id,
+            actor,
+            pending,
+            wizard_action_input(pending.step, data.action, data.argument),
+            context,
+        )
+        return
 
     if data.namespace == "w" and data.action == "cancel":
         ctx.wizards.discard(actor)

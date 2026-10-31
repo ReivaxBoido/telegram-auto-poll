@@ -1085,3 +1085,140 @@ async def test_the_sendnow_button_matches_the_callback_handler(
     async with unit_of_work(factory) as repos:
         counts = await repos.deliveries.counts()
     assert counts[DeliveryStatus.PENDING] == 1
+
+
+async def test_the_button_flow_creates_a_poll(
+    seed: Seed, factory: async_sessionmaker[AsyncSession]
+) -> None:
+    from telegram_auto_poll.bot.callbacks import wizard_action
+
+    ctx, responder, _, _ = build(factory)
+    await handle_command(message("/newpoll"), ctx)
+    assert responder.sent[-1][2] is not None
+    await handle_command(message("Buttons?"), ctx)
+    await handle_callback(callback(wizard_action("skip")), ctx)  # description
+    await handle_command(message("A"), ctx)
+    await handle_command(message("B"), ctx)
+    await handle_callback(callback(wizard_action("done")), ctx)  # options
+    await handle_callback(callback(wizard_action("anon")), ctx)
+    await handle_callback(callback(wizard_action("next")), ctx)
+    await handle_callback(callback(wizard_action("next")), ctx)  # multiple
+    await handle_callback(callback(wizard_action("tgt", seed.chat_id)), ctx)
+    await handle_callback(callback(wizard_action("done")), ctx)  # targets
+    await handle_callback(callback(wizard_action("kind", "daily")), ctx)
+    await handle_command(message("09:00"), ctx)
+    await handle_callback(callback(wizard_action("skip")), ctx)  # timezone
+    await handle_callback(callback(wizard_action("skip")), ctx)  # start
+    await handle_callback(callback(wizard_action("skip")), ctx)  # end
+    await handle_callback(callback(wizard_action("create")), ctx)
+
+    assert "created poll #" in responder.last
+    assert ctx.wizards.get(ADMIN_USER_ID) is None
+
+
+async def test_weekday_buttons_and_back(
+    seed: Seed, factory: async_sessionmaker[AsyncSession]
+) -> None:
+    from telegram_auto_poll.bot.callbacks import wizard_action
+
+    ctx, _, _, _ = build(factory)
+    ctx.wizards.put(
+        WizardState(
+            admin_user_id=ADMIN_USER_ID,
+            step=WizardStep.SCHEDULE_WEEKDAYS,
+            history=(WizardStep.TARGETS,),
+        )
+    )
+
+    await handle_callback(callback(wizard_action("wd", 1)), ctx)
+    await handle_callback(callback(wizard_action("wd", 4)), ctx)
+    session = ctx.wizards.get(ADMIN_USER_ID)
+    assert session is not None
+    assert session.weekdays == (1, 4)
+
+    await handle_callback(callback(wizard_action("back")), ctx)
+    assert ctx.wizards.get(ADMIN_USER_ID).step is WizardStep.TARGETS  # type: ignore[union-attr]
+
+
+async def test_target_pagination_and_add_option_callbacks(
+    seed: Seed, factory: async_sessionmaker[AsyncSession]
+) -> None:
+    from telegram_auto_poll.bot.callbacks import wizard_action
+
+    ctx, responder, _, _ = build(factory)
+    async with unit_of_work(factory) as repos:
+        for index in range(8):
+            await repos.chats.upsert(
+                make_chat(id=None, telegram_chat_id=-2_000_000_000_000 - index), now=FIXED_NOW
+            )
+    ctx.wizards.put(WizardState(admin_user_id=ADMIN_USER_ID, step=WizardStep.TARGETS))
+    await handle_command(message("hello"), ctx)
+    nav = responder.sent[-1][2]
+    assert nav is not None
+    next_button = nav.inline_keyboard[6][0]
+    await handle_callback(callback(str(next_button.callback_data)), ctx)
+    assert ctx.wizards.get(ADMIN_USER_ID).chat_page == 2  # type: ignore[union-attr]
+
+    ctx.wizards.put(WizardState(admin_user_id=ADMIN_USER_ID, step=WizardStep.OPTIONS))
+    await handle_callback(callback(wizard_action("add")), ctx)
+    assert responder.answers[-1][1] == "send the option text"
+
+
+async def test_a_wizard_callback_without_a_session_expires(
+    seed: Seed, factory: async_sessionmaker[AsyncSession]
+) -> None:
+    from telegram_auto_poll.bot.callbacks import wizard_action
+
+    ctx, responder, _, _ = build(factory)
+
+    await handle_callback(callback(wizard_action("next")), ctx)
+
+    assert responder.answers[-1] == ("cb-1", "wizard expired")
+
+
+async def test_wizard_helpers_cover_missing_chats_and_refused_commits(
+    seed: Seed, factory: async_sessionmaker[AsyncSession]
+) -> None:
+    from telegram_auto_poll.bot.callbacks import wizard_action
+    from telegram_auto_poll.bot.handlers.commands import (
+        _advance_and_reply,
+        _chat_names,
+    )
+    from telegram_auto_poll.bot.wizards.engine import WizardContext
+    from telegram_auto_poll.bot.wizards.states import WizardEvent, WizardInput
+
+    ctx, responder, clock, _ = build(factory)
+    context = WizardContext(
+        default_timezone="UTC",
+        active_chat_ids=frozenset({seed.chat_id}),
+        now=clock.now(),
+    )
+    assert (
+        await _chat_names(ctx, WizardState(admin_user_id=ADMIN_USER_ID, targets=frozenset({999})))
+        == {}
+    )
+
+    await _advance_and_reply(
+        ctx,
+        CHAT,
+        ADMIN_USER_ID,
+        WizardState(admin_user_id=ADMIN_USER_ID),
+        WizardInput(kind=WizardEvent.CANCEL),
+        context,
+    )
+    assert "wizard cancelled" in responder.last
+
+    ctx.wizards.put(
+        WizardState(
+            admin_user_id=ADMIN_USER_ID,
+            step=WizardStep.PREVIEW,
+            question="Q?",
+            options=("A", "B"),
+            targets=frozenset({seed.chat_id}),
+            schedule_kind=None,
+        )
+    )
+    async with unit_of_work(factory) as repos:
+        await repos.chats.set_active(seed.chat_id, active=False, now=FIXED_NOW)
+    await handle_callback(callback(wizard_action("create")), ctx)
+    assert "not created" in responder.last
