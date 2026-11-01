@@ -1,6 +1,6 @@
-"""aiohttp sidecar: ``/livez``, ``/healthz``, ``/metrics`` (FR-136, §16.2).
+"""aiohttp sidecar: ``/livez``, ``/healthz``, ``/metrics`` (SPEC-003 FR-339).
 
-``/livez`` proves the process is running. ``/healthz`` adds the database check and a scheduler
+``/livez`` proves the process is running. ``/healthz`` adds the database check and a posting-worker
 heartbeat younger than three ticks, and names every failing reason in the body. Polling failures are
 reported as a metric, never as a readiness failure.
 """
@@ -28,7 +28,7 @@ class HealthReport:
 
 
 class HealthService:
-    """Evaluates the database and scheduler heartbeat."""
+    """Evaluates the database and posting-worker heartbeat."""
 
     def __init__(
         self,
@@ -50,12 +50,12 @@ class HealthService:
         if not db_ok:
             reasons["database"] = "SELECT 1 failed"
         if not heartbeat_ok:
-            reasons["scheduler"] = (
+            reasons["worker"] = (
                 "no heartbeat yet" if age is None else f"heartbeat is {age:.1f}s old"
             )
         return HealthReport(
             healthy=not reasons,
-            checks={"database": db_ok, "scheduler": heartbeat_ok},
+            checks={"database": db_ok, "worker": heartbeat_ok},
             reasons=reasons,
         )
 

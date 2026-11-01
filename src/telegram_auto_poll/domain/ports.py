@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
-from .entities import ChatInfo, PollRequest
+from .entities import ChatInfo, Keyboard
 
 
 class Clock(Protocol):
@@ -29,10 +29,29 @@ class Sleeper(Protocol):
         raise NotImplementedError
 
 
-class PollSender(Protocol):
-    """Sends one poll and returns the Telegram message id."""
+class MessageGateway(Protocol):
+    """Sends and edits bot-authored messages through Telegram."""
 
-    async def send_poll(self, request: PollRequest) -> int:
+    async def send_message(
+        self,
+        chat_id: int,
+        text: str,
+        *,
+        keyboard: Keyboard | None = None,
+    ) -> int:
+        """Send a message and return its Telegram message id."""
+        raise NotImplementedError
+
+    async def edit_message(
+        self,
+        *,
+        text: str,
+        chat_id: int | None = None,
+        message_id: int | None = None,
+        inline_message_id: str | None = None,
+        keyboard: Keyboard | None = None,
+    ) -> None:
+        """Edit an existing message; raise a classified ``DeliveryError`` on failure."""
         raise NotImplementedError
 
 

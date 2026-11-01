@@ -1,10 +1,9 @@
-"""SQLAlchemy 2.0 models for the six tables in constitution §5.2.
+"""SQLAlchemy 2.0 models for the CountMeIn schema (SPEC-003 §7).
 
 Storage conventions:
 
-* timestamps are ``INTEGER`` Unix epoch seconds in UTC (I-14);
-* booleans are ``INTEGER`` guarded by ``CHECK (col IN (0,1))``;
-* JSON payloads are ``TEXT`` guarded by ``json_valid``;
+* timestamps are ``INTEGER`` Unix epoch seconds in UTC (I-28);
+* booleans are not stored in this model; lifecycle is an explicit status string;
 * a naming convention is attached to the metadata so SQLite batch ``ALTER TABLE`` operations produce
   deterministic constraint names.
 
@@ -65,59 +64,28 @@ class ChatRow(Base):
 
 
 class PollRow(Base):
-    """A reusable poll definition."""
+    """A sign-up poll definition."""
 
     __tablename__ = "polls"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    question: Mapped[str] = mapped_column(Text, nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    options_json: Mapped[str] = mapped_column(Text, nullable=False)
-    is_anonymous: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    allows_multiple_answers: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    is_active: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="draft")
+    created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
     updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
 
     __table_args__ = (
-        CheckConstraint("length(question) BETWEEN 1 AND 300", name="question_length"),
-        CheckConstraint(
-            "description IS NULL OR length(description) BETWEEN 0 AND 1024",
-            name="description_length",
-        ),
-        CheckConstraint("json_valid(options_json)", name="options_json_valid"),
-        CheckConstraint(
-            "json_array_length(options_json) BETWEEN 2 AND 12",
-            name="options_count",
-        ),
-        CheckConstraint("is_anonymous IN (0, 1)", name="is_anonymous_bool"),
-        CheckConstraint("allows_multiple_answers IN (0, 1)", name="multiple_answers_bool"),
-        CheckConstraint("is_active IN (0, 1)", name="is_active_bool"),
+        CheckConstraint("length(title) BETWEEN 1 AND 300", name="title_length"),
+        CheckConstraint("status IN ('draft', 'active', 'deleted')", name="status_allowed"),
+        Index("ix_polls_status_created_at", "status", "created_at"),
     )
 
 
-class PollTargetRow(Base):
-    """Poll ↔ chat association."""
+class PollOptionRow(Base):
+    """One ordered option of a poll."""
 
-    __tablename__ = "poll_targets"
-
-    poll_id: Mapped[int] = mapped_column(
-        Integer,
-        ForeignKey("polls.id", ondelete="RESTRICT"),
-        primary_key=True,
-    )
-    chat_id: Mapped[int] = mapped_column(
-        Integer,
-        ForeignKey("chats.id", ondelete="RESTRICT"),
-        primary_key=True,
-    )
-    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
-
-
-class ScheduleRow(Base):
-    """A recurrence rule and its next run."""
-
-    __tablename__ = "schedules"
+    __tablename__ = "poll_options"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     poll_id: Mapped[int] = mapped_column(
@@ -125,36 +93,23 @@ class ScheduleRow(Base):
         ForeignKey("polls.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    kind: Mapped[str] = mapped_column(Text, nullable=False)
-    time_of_day: Mapped[str | None] = mapped_column(Text, nullable=True)
-    weekdays_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    day_of_month: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    run_at_utc: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    timezone: Mapped[str] = mapped_column(Text, nullable=False)
-    starts_on_local_date: Mapped[str | None] = mapped_column(Text, nullable=True)
-    ends_on_local_date: Mapped[str | None] = mapped_column(Text, nullable=True)
-    is_paused: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    next_run_at_utc: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    last_run_at_utc: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    label_folded: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
-    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
 
     __table_args__ = (
-        CheckConstraint("kind IN ('daily', 'weekly', 'monthly', 'once')", name="kind_allowed"),
-        CheckConstraint("is_paused IN (0, 1)", name="is_paused_bool"),
-        CheckConstraint(
-            "day_of_month IS NULL OR day_of_month BETWEEN 1 AND 31",
-            name="day_of_month_range",
-        ),
-        CheckConstraint("length(timezone) > 0", name="timezone_present"),
-        Index("ix_schedules_due", "is_paused", "next_run_at_utc"),
+        UniqueConstraint("poll_id", "position"),
+        UniqueConstraint("poll_id", "label_folded"),
+        CheckConstraint("position BETWEEN 0 AND 9", name="position_range"),
+        CheckConstraint("length(label) BETWEEN 1 AND 100", name="label_length"),
     )
 
 
-class DeliveryRow(Base):
-    """One poll/chat/occurrence send attempt series."""
+class PollInstanceRow(Base):
+    """One publication/occurrence of a poll."""
 
-    __tablename__ = "deliveries"
+    __tablename__ = "poll_instances"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     poll_id: Mapped[int] = mapped_column(
@@ -162,47 +117,101 @@ class DeliveryRow(Base):
         ForeignKey("polls.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    chat_id: Mapped[int] = mapped_column(
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="open")
+    trigger: Mapped[str] = mapped_column(Text, nullable=False, default="manual")
+    scheduled_for_utc: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    closed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('open', 'closed', 'deleted')", name="status_allowed"),
+        CheckConstraint("trigger IN ('manual', 'scheduled')", name="trigger_allowed"),
+        Index("ix_poll_instances_poll_created", "poll_id", "created_at"),
+        Index("ix_poll_instances_status", "status"),
+    )
+
+
+class PollMessageRow(Base):
+    """One bot message for one instance and chat (or inline message)."""
+
+    __tablename__ = "poll_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(
         Integer,
-        ForeignKey("chats.id", ondelete="RESTRICT"),
+        ForeignKey("poll_instances.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    schedule_id: Mapped[int | None] = mapped_column(
+    chat_id: Mapped[int | None] = mapped_column(
         Integer,
-        ForeignKey("schedules.id", ondelete="SET NULL"),
+        ForeignKey("chats.id", ondelete="RESTRICT"),
         nullable=True,
     )
-    trigger: Mapped[str] = mapped_column(Text, nullable=False)
-    scheduled_for_utc: Mapped[int] = mapped_column(Integer, nullable=False)
+    inline_message_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    telegram_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     next_attempt_at_utc: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    telegram_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     skip_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
-    started_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    completed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sent_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
 
     __table_args__ = (
         CheckConstraint(
-            "trigger IN ('scheduled', 'manual')",
-            name="trigger_allowed",
-        ),
-        CheckConstraint(
-            "status IN ('pending', 'sending', 'sent', 'failed', 'skipped')",
+            "status IN ('pending', 'sending', 'sent', 'failed', 'missing', 'skipped')",
             name="status_allowed",
         ),
         CheckConstraint("attempt_count >= 0", name="attempt_count_non_negative"),
-        Index("ix_deliveries_pending", "status", "next_attempt_at_utc"),
+        CheckConstraint(
+            "chat_id IS NOT NULL OR inline_message_id IS NOT NULL",
+            name="target_present",
+        ),
+        Index("ix_poll_messages_pending", "status", "next_attempt_at_utc"),
         Index(
-            "ux_delivery_occurrence",
-            "schedule_id",
-            "scheduled_for_utc",
+            "ux_poll_messages_instance_chat",
+            "instance_id",
             "chat_id",
             unique=True,
-            sqlite_where=text("schedule_id IS NOT NULL"),
+            sqlite_where=text("chat_id IS NOT NULL"),
         ),
+        Index(
+            "ux_poll_messages_instance_inline",
+            "instance_id",
+            "inline_message_id",
+            unique=True,
+            sqlite_where=text("inline_message_id IS NOT NULL"),
+        ),
+    )
+
+
+class PollResponseRow(Base):
+    """A participant's membership in one option of one instance."""
+
+    __tablename__ = "poll_responses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("poll_instances.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    option_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("poll_options.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    first_name: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("instance_id", "option_id", "telegram_user_id"),
+        CheckConstraint("length(first_name) BETWEEN 1 AND 64", name="first_name_length"),
+        Index("ix_poll_responses_instance_option", "instance_id", "option_id"),
     )
 
 
@@ -221,7 +230,7 @@ class AuditEventRow(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "entity_type IN ('poll', 'schedule', 'chat', 'delivery', 'config')",
+            "entity_type IN ('poll', 'poll_instance', 'schedule', 'chat', 'delivery', 'config')",
             name="entity_type_allowed",
         ),
         CheckConstraint(

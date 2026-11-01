@@ -39,7 +39,7 @@ class AuditRepository:
         """Append one immutable event; ``details`` must already be free of secrets."""
         row = AuditEventRow(
             actor_user_id=event.actor_user_id,
-            action=event.action.value,
+            action=event.action,
             entity_type=event.entity_type,
             entity_id=event.entity_id or None,
             details_json=None if event.details is None else dumps(event.details),

@@ -7,23 +7,21 @@ that validate user input; they are what the wizard and the services call.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from datetime import date, datetime, time
+from dataclasses import dataclass
+from datetime import datetime
 
-from .enums import AuditAction, ChatType, DeliveryStatus, ScheduleKind, Trigger
+from .enums import ChatType, InstanceStatus, InstanceTrigger, MessageStatus, PollStatus
 from .errors import ValidationError
-from .schedule_math import next_occurrence
 from .validation import (
     validate_chat_type,
-    validate_date_range,
-    validate_day_of_month,
-    validate_description,
-    validate_once_instant,
-    validate_options,
-    validate_question,
-    validate_timezone,
-    validate_weekdays,
+    validate_option_label,
+    validate_poll_options,
+    validate_poll_title,
 )
+
+#: A Telegram-ready button row: ``(label, callback_data)``. The bot adapter converts it to PTB.
+type Button = tuple[str, str]
+type Keyboard = tuple[tuple[Button, ...], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,159 +63,157 @@ class Chat:
 
 
 @dataclass(frozen=True, slots=True)
-class Poll:
-    """A reusable poll definition."""
+class PollOption:
+    """One ordered answer option of a poll."""
 
-    question: str
-    options: tuple[str, ...]
-    description: str | None = None
-    is_anonymous: bool = True
-    allows_multiple_answers: bool = False
-    is_archived: bool = False
-    targets: tuple[int, ...] = ()
+    label: str
+    position: int
+    poll_id: int | None = None
     id: int | None = None
-    created_at: datetime | None = None
 
     @classmethod
-    def create(
-        cls,
-        *,
-        question: str,
-        options: tuple[str, ...] | list[str],
-        now: datetime,
-        description: str | None = None,
-        is_anonymous: bool = True,
-        allows_multiple_answers: bool = False,
-        targets: tuple[int, ...] = (),
-    ) -> Poll:
+    def create(cls, label: str, *, position: int, poll_id: int | None = None) -> PollOption:
+        """Validate and build an option at ``position``."""
         return cls(
-            question=validate_question(question),
-            options=validate_options(options),
-            description=validate_description(description),
-            is_anonymous=is_anonymous,
-            allows_multiple_answers=allows_multiple_answers,
-            targets=tuple(targets),
-            created_at=now,
+            label=validate_option_label(label),
+            position=position,
+            poll_id=poll_id,
         )
 
 
 @dataclass(frozen=True, slots=True)
-class Schedule:
-    """A recurrence rule and its next run, always stored in UTC."""
+class Poll:
+    """A reusable sign-up poll definition: a title and 1-10 ordered options."""
 
-    poll_id: int
-    kind: ScheduleKind
-    timezone: str
-    time_of_day: time | None = None
-    weekdays: tuple[int, ...] = ()
-    day_of_month: int | None = None
-    run_at: datetime | None = None
-    start_date: date | None = None
-    end_date: date | None = None
-    is_paused: bool = False
-    next_run_at: datetime | None = None
-    last_run_at: datetime | None = None
+    title: str
+    options: tuple[PollOption, ...]
+    status: PollStatus = PollStatus.DRAFT
+    created_by: int = 0
     id: int | None = None
     created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     @classmethod
     def create(
         cls,
         *,
-        poll_id: int,
-        kind: ScheduleKind | str,
-        timezone: str,
+        title: str,
+        options: tuple[str, ...] | list[str],
+        created_by: int,
         now: datetime,
-        time_of_day: time | None = None,
-        weekdays: tuple[int, ...] | list[int] = (),
-        day_of_month: int | None = None,
-        run_at: datetime | None = None,
-        start_date: date | None = None,
-        end_date: date | None = None,
-    ) -> Schedule:
-        try:
-            resolved_kind = ScheduleKind(kind)
-        except ValueError as exc:
-            raise ValidationError(
-                "kind",
-                "schedule kind must be daily, weekly, monthly, or once",
-            ) from exc
-
-        resolved_tz = validate_timezone(timezone)
-        resolved_start, resolved_end = validate_date_range(start_date, end_date)
-
-        resolved_weekdays: tuple[int, ...] = ()
-        resolved_day: int | None = None
-        resolved_run_at: datetime | None = None
-        resolved_time = time_of_day
-
-        if resolved_kind is ScheduleKind.WEEKLY:
-            resolved_weekdays = validate_weekdays(weekdays)
-        elif resolved_kind is ScheduleKind.MONTHLY:
-            if day_of_month is None:
-                raise ValidationError("day_of_month", "a monthly schedule needs a day of the month")
-            resolved_day = validate_day_of_month(day_of_month)
-        elif resolved_kind is ScheduleKind.ONCE:
-            if run_at is None:
-                raise ValidationError("run_at", "a one-off schedule needs an instant")
-            resolved_run_at = validate_once_instant(run_at, now=now)
-            resolved_time = None
-        elif resolved_time is None:
-            raise ValidationError("time_of_day", "a daily schedule needs a time of day")
-
-        schedule = cls(
-            poll_id=poll_id,
-            kind=resolved_kind,
-            timezone=resolved_tz,
-            time_of_day=resolved_time,
-            weekdays=resolved_weekdays,
-            day_of_month=resolved_day,
-            run_at=resolved_run_at,
-            start_date=resolved_start,
-            end_date=resolved_end,
+    ) -> Poll:
+        """Validate and build a draft poll. Options are not persisted until the service runs."""
+        labels = validate_poll_options(options)
+        return cls(
+            title=validate_poll_title(title),
+            options=tuple(
+                PollOption.create(label, position=position) for position, label in enumerate(labels)
+            ),
+            created_by=created_by,
             created_at=now,
+            updated_at=now,
         )
-        return replace(schedule, next_run_at=next_occurrence(schedule, after=now))
+
+    def option(self, option_id: int) -> PollOption | None:
+        """Return the option with ``option_id``, or ``None``."""
+        return next((option for option in self.options if option.id == option_id), None)
 
 
 @dataclass(frozen=True, slots=True)
-class Delivery:
-    """One poll/chat/occurrence send attempt series."""
+class PollInstance:
+    """One publication/occurrence of a poll.
+
+    Responses belong to the instance, so a later occurrence starts with a fresh list.
+    """
 
     poll_id: int
-    chat_id: int
-    trigger: Trigger
-    status: DeliveryStatus = DeliveryStatus.PENDING
+    status: InstanceStatus = InstanceStatus.OPEN
+    trigger: InstanceTrigger = InstanceTrigger.MANUAL
     scheduled_for: datetime | None = None
-    schedule_id: int | None = None
+    created_by: int = 0
+    id: int | None = None
+    created_at: datetime | None = None
+    closed_at: datetime | None = None
+
+    @property
+    def is_open(self) -> bool:
+        """Whether the instance currently accepts votes."""
+        return self.status is InstanceStatus.OPEN
+
+
+@dataclass(frozen=True, slots=True)
+class PollMessage:
+    """One bot message for one instance and chat (or inline message)."""
+
+    instance_id: int
+    chat_id: int | None = None
+    inline_message_id: str | None = None
+    telegram_message_id: int | None = None
+    status: MessageStatus = MessageStatus.PENDING
     attempt_count: int = 0
     next_attempt_at: datetime | None = None
-    telegram_message_id: int | None = None
     last_error: str | None = None
     skip_reason: str | None = None
-    started_at: datetime | None = None
-    completed_at: datetime | None = None
     id: int | None = None
     created_at: datetime | None = None
+    sent_at: datetime | None = None
+    updated_at: datetime | None = None
 
     @property
     def is_terminal(self) -> bool:
+        """Whether no automatic retry will happen."""
         return self.status in {
-            DeliveryStatus.SENT,
-            DeliveryStatus.FAILED,
-            DeliveryStatus.SKIPPED,
+            MessageStatus.SENT,
+            MessageStatus.FAILED,
+            MessageStatus.MISSING,
+            MessageStatus.SKIPPED,
         }
 
-    def remaining_attempts(self, max_attempts: int) -> int:
-        return max(max_attempts - self.attempt_count, 0)
+
+@dataclass(frozen=True, slots=True)
+class PollResponse:
+    """A participant's membership in one option of one instance."""
+
+    instance_id: int
+    option_id: int
+    telegram_user_id: int
+    first_name: str
+    id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OptionResponses:
+    """One option plus its respondents, ordered by response time."""
+
+    option: PollOption
+    respondents: tuple[tuple[int, str], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PollButton:
+    """A vote button with its already-encoded callback data."""
+
+    label: str
+    callback_data: str
+
+
+@dataclass(frozen=True, slots=True)
+class PollRender:
+    """The rendered poll message and the buttons it should carry."""
+
+    text: str
+    buttons: tuple[PollButton, ...] = ()
+    closed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class AuditEvent:
-    """An immutable record of one mutation (FR-134)."""
+    """An immutable record of one admin mutation (FR-336)."""
 
     actor_user_id: int
-    action: AuditAction
+    action: str
     entity_type: str
     entity_id: int
     details: dict[str, object] | None = None
@@ -226,15 +222,12 @@ class AuditEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class PollRequest:
-    """The exact payload handed to the ``PollSender`` port (FR-129)."""
+class BroadcastResult:
+    """What one render/redact pass changed."""
 
-    chat_id: int
-    question: str
-    options: tuple[str, ...]
-    description: str | None = None
-    is_anonymous: bool = True
-    allows_multiple_answers: bool = False
+    edited: int = 0
+    missing: int = 0
+    failed: int = 0
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,8 +1,8 @@
-"""PTB application wiring (T-046, FR-109, FR-110).
+"""PTB application wiring (SPEC-003 FR-341).
 
 The dispatcher stays deliberately thin: one private-chat message handler routes to
-``handle_command`` (which performs authorization) and one callback handler routes to
-``handle_callback``. Only private chats are filtered, so group traffic never reaches the bot at all.
+``handle_command`` and one callback handler routes to ``handle_callback``. Vote callbacks come from
+groups, so the callback handler is not filtered by chat type; authorization decides.
 """
 
 from __future__ import annotations
@@ -34,12 +34,12 @@ COMMAND_MENU: tuple[tuple[str, str], ...] = (
     ("polls", "List polls"),
     ("poll", "Show a poll"),
     ("newpoll", "Create a poll"),
-    ("schedules", "List schedules"),
-    ("schedule", "Show a schedule"),
-    ("pause", "Pause a schedule"),
-    ("resume", "Resume a schedule"),
-    ("delete_schedule", "Delete a schedule"),
-    ("sendnow", "Send a poll now"),
+    ("publish", "Publish a poll to chats"),
+    ("close", "Close the latest instance"),
+    ("reopen", "Reopen the latest closed instance"),
+    ("refresh", "Re-render and retry a poll"),
+    ("responses", "Show names for an option"),
+    ("deletepoll", "Delete a poll and its responses"),
     ("cancel", "Cancel the open wizard"),
 )
 
@@ -50,7 +50,7 @@ def command_menu() -> list[BotCommand]:
 
 
 def private_command_scope() -> BotCommandScopeAllPrivateChats:
-    """Return the only scope the bot registers commands in (FR-110)."""
+    """Return the only scope the bot registers commands in."""
     return BotCommandScopeAllPrivateChats()
 
 
@@ -64,6 +64,21 @@ class BotResponder:
         self, chat_id: int, text: str, *, keyboard: InlineKeyboardMarkup | None = None
     ) -> None:
         await self._bot.send_message(chat_id=chat_id, text=text, reply_markup=keyboard)
+
+    async def edit(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        *,
+        keyboard: InlineKeyboardMarkup | None = None,
+    ) -> None:
+        await self._bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=keyboard,
+        )
 
     async def answer(self, callback_query_id: str, text: str) -> None:
         await self._bot.answer_callback_query(callback_query_id=callback_query_id, text=text)

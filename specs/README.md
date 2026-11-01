@@ -61,3 +61,10 @@ GATE G4 APPROVED — @maintainer — 2026-10-31
 ```
 
 An AI agent must stop and wait at every gate. See `CONSTITUTION.md` §12.3.
+
+## Current program
+
+- SPEC-001 (native scheduled polls) and SPEC-002 (buttons-first native wizard) are superseded by the
+  CountMeIn pivot.
+- SPEC-003 (`003-countmein-core/`) is the core sign-up poll release.
+- SPEC-004 (scheduled auto-post) and SPEC-005 (inline mode and poll editing) follow.

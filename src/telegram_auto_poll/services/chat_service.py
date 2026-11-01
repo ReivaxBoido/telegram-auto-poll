@@ -1,17 +1,11 @@
-"""Chat registration, listing, and deactivation (FR-112 - FR-115).
-
-Registration is idempotent by ``telegram_chat_id`` and reactivates a previously removed chat.
-Deactivation never deletes history: it deactivates the row, skips pending deliveries, and pauses
-schedules that have no active target left.
-"""
+"""Chat registration, listing, and deactivation (SPEC-003 FR-112 - FR-115)."""
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
-from datetime import datetime
 
-from ..db.uow import Repositories, UnitOfWork
+from ..db.uow import UnitOfWork
 from ..domain.entities import AuditEvent, Chat
 from ..domain.enums import AuditAction, ChatType, SkipReason
 from ..domain.errors import NotFoundError, PermissionDeniedError, ValidationError
@@ -54,8 +48,7 @@ class DeactivationResult:
     """What deactivating a chat changed."""
 
     chat: Chat
-    skipped_deliveries: int
-    paused_schedules: tuple[int, ...]
+    skipped_messages: int
 
 
 class ChatService:
@@ -110,7 +103,7 @@ class ChatService:
             await repos.audit.add(
                 AuditEvent(
                     actor_user_id=actor_user_id,
-                    action=AuditAction.CHAT_REGISTER,
+                    action=AuditAction.CHAT_REGISTER.value,
                     entity_type="chat",
                     entity_id=stored.id or 0,
                     details={
@@ -126,7 +119,7 @@ class ChatService:
         return RegistrationResult(chat=stored, reactivated=reactivated, warning=warning)
 
     async def deactivate(self, chat_id: int, *, actor_user_id: int) -> DeactivationResult:
-        """Deactivate a chat, skip its pending deliveries, and pause orphaned schedules.
+        """Deactivate a chat and skip its pending messages.
 
         Raises:
             NotFoundError: no chat has that surrogate id.
@@ -137,61 +130,25 @@ class ChatService:
             if chat is None:
                 raise NotFoundError(f"chat {chat_id} is not registered")
             if not chat.is_active:
-                return DeactivationResult(chat=chat, skipped_deliveries=0, paused_schedules=())
+                return DeactivationResult(chat=chat, skipped_messages=0)
 
             await repos.chats.set_active(chat_id, active=False, now=now)
             deactivated = replace(chat, is_active=False)
-            skipped = await repos.deliveries.skip_pending_for_chat(
+            skipped = await repos.messages.skip_pending_for_chat(
                 chat_id, reason=SkipReason.CHAT_INACTIVE.value, now=now
             )
-            paused = await self._pause_orphans(repos, chat_id, actor_user_id=actor_user_id, now=now)
             await repos.audit.add(
                 AuditEvent(
                     actor_user_id=actor_user_id,
-                    action=AuditAction.CHAT_DEACTIVATE,
+                    action=AuditAction.CHAT_DEACTIVATE.value,
                     entity_type="chat",
                     entity_id=chat_id,
-                    details={
-                        "skipped_deliveries": skipped,
-                        "paused_schedules": list(paused),
-                    },
+                    details={"skipped_messages": skipped},
                     created_at=now,
                 ),
                 now=now,
             )
-            return DeactivationResult(
-                chat=deactivated, skipped_deliveries=skipped, paused_schedules=paused
-            )
-
-    async def _pause_orphans(
-        self,
-        repos: Repositories,
-        chat_id: int,
-        *,
-        actor_user_id: int,
-        now: datetime,
-    ) -> tuple[int, ...]:
-        """Pause schedules whose poll no longer has any active target (FR-115)."""
-        active_targets = await repos.chats.active_ids()
-        paused: list[int] = []
-        for poll_id, poll_targets in (await repos.polls.targets_for_chat(chat_id)).items():
-            if set(poll_targets) & active_targets:
-                continue
-            newly_paused = await repos.schedules.pause_for_poll(poll_id, now=now)
-            for schedule_id in newly_paused:
-                await repos.audit.add(
-                    AuditEvent(
-                        actor_user_id=actor_user_id,
-                        action=AuditAction.SCHEDULE_PAUSE,
-                        entity_type="schedule",
-                        entity_id=schedule_id,
-                        details={"reason": "no_active_targets"},
-                        created_at=now,
-                    ),
-                    now=now,
-                )
-            paused.extend(newly_paused)
-        return tuple(paused)
+            return DeactivationResult(chat=deactivated, skipped_messages=skipped)
 
     async def page(self, number: int, *, active_only: bool = False) -> Page[Chat]:
         """Return one page of registered chats, ordered by Telegram chat id."""
@@ -202,3 +159,17 @@ class ChatService:
                 active_only=active_only, limit=self._page_size, offset=offset
             )
         return Page.create(items, number=number, size=self._page_size, total=total)
+
+    async def page_sized(
+        self,
+        number: int,
+        *,
+        size: int,
+        active_only: bool = True,
+    ) -> Page[Chat]:
+        """Return one page with an explicit size (the publish selector uses six rows)."""
+        offset = offset_for(number, size)
+        async with self._uow() as repos:
+            total = await repos.chats.count(active_only=active_only)
+            items = await repos.chats.list_all(active_only=active_only, limit=size, offset=offset)
+        return Page.create(items, number=number, size=size, total=total)
