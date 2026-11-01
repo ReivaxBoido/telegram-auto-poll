@@ -111,7 +111,7 @@ uv run pytest --cov --cov-branch --cov-fail-under=100
 docker build -t telegram-auto-poll:local .
 ```
 
-The suite currently has **324 tests at 100% line and branch coverage**.
+The suite currently has **328 tests at 100% line and branch coverage**.
 
 ## Documentation
 

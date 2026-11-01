@@ -29,7 +29,7 @@ All notable changes to this project are documented here. The format follows
 - Admin commands are DM-only and allowlist-only; vote callbacks are accepted from target-chat members
   and validated against the stored message, instance, and option.
 - The posting worker sends and edits bot-authored text messages instead of calling `sendPoll`.
-- The default test suite and fixtures were rewritten for the new model; 324 tests at 100% line and
+- The default test suite and fixtures were rewritten for the new model; 328 tests at 100% line and
   branch coverage.
 
 ### Removed
