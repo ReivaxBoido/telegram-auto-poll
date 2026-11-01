@@ -33,6 +33,15 @@ SAMPLE_CALLBACKS = [
     ("w", "anonymous_toggle", None),
     ("w", "multiple_toggle", None),
     ("w", "target_toggle", "-1001234567890"),
+    ("w", "tgt", -1001234567890),
+    ("w", "tgtp", 2),
+    ("w", "wd", 7),
+    ("w", "opt", 11),
+    ("w", "kind", "daily"),
+    ("w", "kind", "none"),
+    ("w", "add", None),
+    ("w", "anon", None),
+    ("w", "multi", None),
     ("w", "back", None),
     ("w", "confirm", None),
 ]
@@ -111,3 +120,29 @@ def test_decoding_rejects_an_invalid_argument() -> None:
 
 def test_decoding_accepts_an_argument_with_underscores_and_dashes() -> None:
     assert decode("v1:w:target_toggle:-1001234567890").argument == "-1001234567890"
+
+
+def test_wizard_builders_cover_every_action() -> None:
+    from telegram_auto_poll.bot import callbacks
+
+    for action, argument in (
+        (callbacks.WIZARD_BACK, None),
+        (callbacks.WIZARD_NEXT, None),
+        (callbacks.WIZARD_DONE, None),
+        (callbacks.WIZARD_SKIP, None),
+        (callbacks.WIZARD_CANCEL, None),
+        (callbacks.WIZARD_ANONYMITY, None),
+        (callbacks.WIZARD_MULTIPLE, None),
+        (callbacks.WIZARD_ADD_OPTION, None),
+        (callbacks.WIZARD_KIND, "weekly"),
+        (callbacks.WIZARD_WEEKDAY, 4),
+        (callbacks.WIZARD_TARGET, -1001234567890),
+        (callbacks.WIZARD_TARGET_PAGE, 3),
+        (callbacks.WIZARD_OPTION_REMOVE, 2),
+    ):
+        data = callbacks.wizard_action(action, argument)
+        decoded = decode(data)
+        assert decoded.namespace == "w"
+        assert decoded.action == action
+        assert decoded.argument == (None if argument is None else str(argument))
+        assert len(data.encode()) <= 64

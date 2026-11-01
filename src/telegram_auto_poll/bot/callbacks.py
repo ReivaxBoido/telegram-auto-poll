@@ -89,6 +89,22 @@ def schedule_action(action: str, schedule_id: int | None = None) -> str:
     return encode(NAMESPACE_SCHEDULE, action, schedule_id)
 
 
+WIZARD_BACK = "back"
+WIZARD_CANCEL = "cancel"
+WIZARD_NEXT = "next"
+WIZARD_DONE = "done"
+WIZARD_SKIP = "skip"
+WIZARD_ANONYMITY = "anon"
+WIZARD_MULTIPLE = "multi"
+WIZARD_TARGET = "tgt"
+WIZARD_TARGET_PAGE = "tgtp"
+WIZARD_KIND = "kind"
+WIZARD_WEEKDAY = "wd"
+WIZARD_OPTION_REMOVE = "opt"
+WIZARD_ADD_OPTION = "add"
+WIZARD_CONFIRM = "create"
+
+
 def wizard_action(action: str, argument: str | int | None = None) -> str:
     """Encode a wizard-namespace callback."""
     return encode(NAMESPACE_WIZARD, action, argument)
