@@ -35,7 +35,8 @@ def _assert_safe_to_reset() -> None:
     for table in _OLD_TABLES:
         if table not in tables:
             continue
-        count = bind.execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+        table_obj = sa.Table(table, sa.MetaData(), autoload_with=bind)
+        count = bind.execute(sa.select(sa.func.count()).select_from(table_obj)).scalar_one()
         if count:
             counts[table] = int(count)
     if counts:
