@@ -219,7 +219,10 @@ class ResponseBroadcaster:
                             "message_edit_failed",
                             extra={
                                 "message_id": message.id,
+                                "instance_id": message.instance_id,
                                 "classification": exc.classification,
+                                "error": str(exc),
+                                "retryable": exc.retryable,
                             },
                         )
                         return "failed"

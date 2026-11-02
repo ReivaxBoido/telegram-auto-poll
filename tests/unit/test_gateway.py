@@ -196,3 +196,13 @@ async def test_chat_gateway_member_statuses() -> None:
 
     assert await TelegramChatGateway(RestrictedBot()).get_member(1, 2) is True  # type: ignore[arg-type]
     assert await TelegramChatGateway(MemberBot()).get_member(1, 2) is False  # type: ignore[arg-type]
+
+
+async def test_edit_without_a_keyboard_removes_it() -> None:
+    bot = RaisingBot()
+    gateway = TelegramMessageGateway(bot)  # type: ignore[arg-type]
+
+    await gateway.edit_message(text="closed", chat_id=1, message_id=2)
+
+    markup = bot.edited[0]["reply_markup"]
+    assert markup.inline_keyboard == ()

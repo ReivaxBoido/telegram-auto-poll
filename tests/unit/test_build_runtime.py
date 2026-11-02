@@ -248,3 +248,21 @@ async def test_runtime_run_without_on_start() -> None:
     stop.set()
     await runtime.run(stop)
     assert polling.started == 1
+
+
+def test_main_configures_logging(tmp_path: Path, monkeypatch: Any) -> None:
+    from telegram_auto_poll import app as app_module
+
+    called: dict[str, object] = {}
+
+    def capture(**kwargs: object) -> None:
+        called.update(kwargs)
+
+    async def run(stop: asyncio.Event) -> None:
+        return None
+
+    monkeypatch.setattr(app_module, "configure_logging", capture)
+    monkeypatch.setattr(app_module, "build_runtime", lambda settings: SimpleNamespace(run=run))
+    assert app_module.main(_settings(tmp_path)) == 0  # type: ignore[arg-type]
+    assert called["log_format"] == "json"
+    assert called["environment"] == "production"

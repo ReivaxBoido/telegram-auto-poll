@@ -37,6 +37,7 @@ from .db.engine import check_database, create_engine, create_session_factory
 from .db.migrate import migrate_on_startup
 from .db.uow import unit_of_work
 from .domain.ports import Clock
+from .logging_setup import configure_logging
 from .observability.health import HealthService, create_health_app
 from .observability.metrics import Metrics
 from .scheduler.engine import (
@@ -429,6 +430,13 @@ def main(settings: Settings | None = None) -> int:
     except ConfigurationError as exc:
         print(f"telegram-auto-poll: {exc}", file=sys.stderr)
         return EXIT_FAILURE
+
+    configure_logging(
+        level=resolved.log_level,
+        log_format=resolved.log_format,
+        environment=resolved.environment,
+        version=resolved.build_version,
+    )
 
     lock = SingleInstanceLock(resolved.data_dir)
     try:

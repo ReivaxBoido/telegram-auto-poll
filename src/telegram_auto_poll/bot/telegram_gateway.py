@@ -163,11 +163,15 @@ class TelegramMessageGateway:
         inline_message_id: str | None = None,
         keyboard: Keyboard | None = None,
     ) -> None:
-        """Edit an existing message; ``not modified`` is treated as success."""
-        payload: dict[str, object] = {
-            "text": text,
-            "reply_markup": _keyboard_markup(keyboard),
-        }
+        """Edit an existing message; ``not modified`` is treated as success.
+
+        An edit always states the desired keyboard. ``None`` therefore means "remove the keyboard",
+        not "leave it unchanged"; Telegram treats an omitted ``reply_markup`` as unchanged.
+        """
+        reply_markup = (
+            _keyboard_markup(keyboard) if keyboard is not None else InlineKeyboardMarkup([])
+        )
+        payload: dict[str, object] = {"text": text, "reply_markup": reply_markup}
         if inline_message_id is not None:
             payload["inline_message_id"] = inline_message_id
         else:
