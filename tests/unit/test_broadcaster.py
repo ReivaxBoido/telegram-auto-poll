@@ -62,6 +62,7 @@ async def test_refresh_edits_every_sent_message(
     assert result.edited == 1
     assert "Alice" in str(gateway.edits[0]["text"])
     assert gateway.edits[0]["message_id"] == seed.message.telegram_message_id
+    assert gateway.edits[0]["chat_id"] == seed.chat.telegram_chat_id
 
 
 async def test_redact_removes_names_and_keyboard(
@@ -305,3 +306,19 @@ async def test_run_without_debounce_processes_dirty(
     stop.set()
     await task
     assert len(gateway.edits) == 1
+
+
+async def test_missing_chat_row_leaves_the_edit_target_empty(
+    broadcaster: ResponseBroadcaster,
+    gateway: FakeMessageGateway,
+    seed: Seed,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from telegram_auto_poll.db.repositories.chats import ChatRepository
+
+    async def no_chat(self: object, chat_id: int) -> None:
+        return None
+
+    monkeypatch.setattr(ChatRepository, "get", no_chat)
+    await broadcaster.refresh(seed.instance_id)
+    assert gateway.edits[0]["chat_id"] is None

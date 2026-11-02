@@ -45,6 +45,7 @@ class _Loaded:
     instance: PollInstance
     responses: tuple[PollResponse, ...]
     messages: tuple[PollMessage, ...]
+    telegram_chat_ids: dict[int, int]
 
 
 class ResponseBroadcaster:
@@ -138,7 +139,12 @@ class ResponseBroadcaster:
 
         results = await asyncio.gather(
             *[
-                self._edit_one(message, render.text, keyboard)
+                self._edit_one(
+                    message,
+                    render.text,
+                    keyboard,
+                    loaded.telegram_chat_ids.get(message.chat_id or 0),
+                )
                 for message in loaded.messages
                 if message.status is MessageStatus.SENT and message.telegram_message_id is not None
             ]
@@ -159,11 +165,17 @@ class ResponseBroadcaster:
                 return None
             responses = tuple(await repos.responses.list_for_instance(instance_id))
             messages = tuple(await repos.messages.list_for_instance(instance_id))
+            telegram_chat_ids: dict[int, int] = {}
+            for chat_id in {message.chat_id for message in messages if message.chat_id is not None}:
+                chat = await repos.chats.get(chat_id)
+                if chat is not None:
+                    telegram_chat_ids[chat_id] = chat.telegram_chat_id
         return _Loaded(
             poll=poll,
             instance=instance,
             responses=responses,
             messages=messages,
+            telegram_chat_ids=telegram_chat_ids,
         )
 
     def _render(self, loaded: _Loaded, *, redact: bool) -> PollRender:
@@ -198,13 +210,14 @@ class ResponseBroadcaster:
         message: PollMessage,
         text: str,
         keyboard: tuple[tuple[tuple[str, str], ...], ...] | None,
+        telegram_chat_id: int | None,
     ) -> str:
         async with self._semaphore:
             for attempt in range(self._max_attempts):
                 try:
                     await self._gateway.edit_message(
                         text=text,
-                        chat_id=message.chat_id,
+                        chat_id=telegram_chat_id,
                         message_id=message.telegram_message_id,
                         inline_message_id=message.inline_message_id,
                         keyboard=keyboard,
