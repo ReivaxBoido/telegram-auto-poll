@@ -50,6 +50,8 @@ def _truncate_button(label: str) -> str:
 
 def _option_lines(option: OptionResponses, limit: int) -> list[str]:
     count = len(option.respondents)
+    if count == 0:
+        return [option.option.label]
     lines = [f"{option.option.label} ({count}{PEOPLE})"]
     names = [name for _, name in option.respondents[:limit]]
     lines.extend(names)
@@ -138,16 +140,5 @@ def _option_id(option: OptionResponses) -> int:
 
 
 def keyboard_rows(render: PollRender) -> tuple[tuple[tuple[str, str], ...], ...]:
-    """Group vote buttons two per row."""
-    if not render.buttons:
-        return ()
-    rows: list[tuple[tuple[str, str], ...]] = []
-    current: list[tuple[str, str]] = []
-    for button in render.buttons:
-        current.append((button.label, button.callback_data))
-        if len(current) == 2:
-            rows.append(tuple(current))
-            current = []
-    if current:
-        rows.append(tuple(current))
-    return tuple(rows)
+    """Give every vote button its own row."""
+    return tuple(((button.label, button.callback_data),) for button in render.buttons)

@@ -122,7 +122,7 @@ IDs are document-scoped and start at 301 to avoid colliding with SPEC-001/002.
 
 | ID | Requirement | Priority | Acceptance criteria |
 |---|---|---|---|
-| FR-326 | The renderer MUST show the title, each option as `label (N👥)` followed by up to `RESPONSE_NAMES_PER_OPTION` first names on separate lines, `... +N more` when truncated, and a final `👥 N people responded` line. It MUST use plain text, no parse mode. | P0 | Given 12 names and a limit of 10, then 10 names and `... +2 more` are shown. |
+| FR-326 | The renderer MUST show the title, each option with respondents as `label (N👥)` followed by up to `RESPONSE_NAMES_PER_OPTION` first names on separate lines, `... +N more` when truncated, and a final `👥 N people responded` line. An option with no respondents MUST render as its label alone. It MUST use plain text, no parse mode. | P0 | Given 12 names and a limit of 10, then 10 names and `... +2 more` are shown; given an empty option, only its label is shown. |
 | FR-327 | The rendered text MUST never exceed 4,096 characters. If it would, the renderer MUST reduce the number of names per option (10 → 5 → 3 → 1 → 0) until it fits. It MUST NOT silently truncate the title or option labels. | P0 | Given 10 options with 10 long names each, then the output is ≤4,096 and the title/options are intact. |
 | FR-328 | A closed instance MUST render `Voting closed.` and no keyboard. A deleted poll MUST render `This poll was deleted.` with no names and no keyboard. | P0 | Given each state, then the exact rendering is produced and the keyboard is absent. |
 | FR-329 | Message edits MUST treat Telegram `message is not modified` as success, mark `message to edit not found` as `missing`, honour `429 retry_after` (clamped to 300 s), and retry 5xx/timeouts with bounded backoff. | P0 | Given each error, then the expected status/retry is recorded and no unhandled exception escapes. |
@@ -268,17 +268,16 @@ Wed training @ MPSH
 Alice
 Bob
 
-1045-1330 (1👥)
-Carol
+1045-1330
 
-👥 3 people responded
+👥 2 people responded
 ```
 
 - The title is the first line, followed by a blank line.
-- Each option is rendered as `label (N👥)`, then one first name per line, then a blank line.
+- Each option with respondents is rendered as `label (N👥)`, then one first name per line, then a blank line. An option with no respondents is rendered as its label alone.
 - When an option has more names than the display limit, the last line is `... +N more`.
 - The footer is `👥 N people responded` (or `👥 1 person responded`, `👥 Nobody responded`).
-- One button per option, two per row (maximum 5 rows for 10 options).
+- One button per option, one per row (up to 10 rows for 10 options; the vote keyboard is the documented exception to the 8-row admin guideline).
 - Button text is the option label truncated to 60 characters with `…`; the message shows the full label.
 - Closed: `Voting closed.` and no keyboard.
 - Deleted: `This poll was deleted.` and no keyboard.
@@ -298,8 +297,8 @@ All values are integers or short enum tokens; every generated callback is ≤64 
 
 ### 8.6 Limits and empty/error states
 
-- Messages ≤4,096 characters; lists paginate at 8 items (6 for chat selection); keyboards ≤8 rows and
-  ≤4 buttons per row.
+- Messages ≤4,096 characters; lists paginate at 8 items (6 for chat selection); admin keyboards
+  ≤8 rows, and the vote keyboard uses one row per option (up to 10 rows); ≤4 buttons per row.
 - Empty poll list explains `/newpoll`; empty chat list explains `/addchat`.
 - A vote on a closed/deleted poll explains the state and offers no retry.
 - Destructive actions (`/close`, `/deletepoll`) show a summary and a two-button confirmation.

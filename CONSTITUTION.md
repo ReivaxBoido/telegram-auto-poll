@@ -1020,7 +1020,7 @@ to start again.
 - Telegram poll limits are enforced before sending: question 1–300, description 0–1024, options 2–12
   (API permits 1–12; this project requires at least 2), option text 1–100.
 - Admin text messages are capped at 4,096 characters; long lists are paginated or summarized.
-- Inline keyboards are limited to 8 rows by the UI guideline, with at most 4 buttons per row.
+- Admin keyboards are limited to 8 rows, with at most 4 buttons per row. The participant vote keyboard uses one row per option (up to 10 rows for 10 options) so every option is a full-width target.
 - Poll content is never truncated silently. If a value exceeds a limit, the wizard rejects it with the
   exact limit and the current length.
 

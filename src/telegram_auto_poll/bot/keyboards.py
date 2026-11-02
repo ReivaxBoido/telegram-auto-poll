@@ -20,6 +20,7 @@ from ..domain.enums import InstanceStatus, PollStatus
 from ..domain.poll_render import keyboard_rows
 
 MAX_ROWS = 8
+VOTE_MAX_ROWS = 10
 MAX_BUTTONS_PER_ROW = 4
 TARGET_PAGE_SIZE = 6
 CHAT_LABEL_MAX = 40
@@ -31,14 +32,17 @@ class KeyboardLayoutError(ValueError):
     """A keyboard exceeds Telegram's or the spec's layout limits."""
 
 
-def build_keyboard(rows: Sequence[Sequence[Button]]) -> InlineKeyboardMarkup:
+def build_keyboard(
+    rows: Sequence[Sequence[Button]], *, max_rows: int = MAX_ROWS
+) -> InlineKeyboardMarkup:
     """Build a keyboard, validating the row and button counts first.
 
     Raises:
-        KeyboardLayoutError: more than 8 rows, an empty row, or more than 4 buttons in a row.
+        KeyboardLayoutError: more than ``max_rows`` rows, an empty row, or more than 4 buttons in a
+            row. The vote keyboard uses one row per option and allows up to ``VOTE_MAX_ROWS``.
     """
-    if len(rows) > MAX_ROWS:
-        raise KeyboardLayoutError(f"at most {MAX_ROWS} rows are allowed (got {len(rows)})")
+    if len(rows) > max_rows:
+        raise KeyboardLayoutError(f"at most {max_rows} rows are allowed (got {len(rows)})")
     built: list[list[InlineKeyboardButton]] = []
     for row in rows:
         if not row:
@@ -56,7 +60,7 @@ def vote_keyboard(render: PollRender) -> InlineKeyboardMarkup | None:
     rows = keyboard_rows(render)
     if not rows:
         return None
-    return build_keyboard(rows)
+    return build_keyboard(rows, max_rows=VOTE_MAX_ROWS)
 
 
 def confirmation_keyboard(

@@ -33,7 +33,7 @@ def test_open_poll_renders_counts_names_and_buttons() -> None:
     assert "In (2👥)" in render.text
     assert "Alice" in render.text
     assert "Bob" in render.text
-    assert "Out (0👥)" in render.text
+    assert "Out" in render.text
     assert "👥 2 people responded" in render.text
     assert [button.callback_data for button in render.buttons] == [
         "v1:v:toggle:100_1",
@@ -154,9 +154,8 @@ def test_keyboard_rows_groups_two_per_row_and_handles_empty() -> None:
         PollButton(label=f"L{index}", callback_data=f"v1:v:1:{index}") for index in range(3)
     )
     rows = keyboard_rows(PollRender(text="x", buttons=buttons))
-    assert len(rows) == 2
-    assert len(rows[0]) == 2
-    assert len(rows[1]) == 1
+    assert len(rows) == 3
+    assert all(len(row) == 1 for row in rows)
 
 
 def test_button_labels_are_truncated() -> None:

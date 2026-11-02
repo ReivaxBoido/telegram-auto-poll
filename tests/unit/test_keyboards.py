@@ -48,7 +48,8 @@ def test_vote_keyboard_from_render() -> None:
     )
     markup = vote_keyboard(render)
     assert markup is not None
-    assert len(markup.inline_keyboard) == 1
+    assert len(markup.inline_keyboard) == 2
+    assert all(len(row) == 1 for row in markup.inline_keyboard)
     assert vote_keyboard(PollRender(text="x")) is None
 
 
@@ -128,3 +129,17 @@ def test_pagination_without_an_argument() -> None:
         namespace="p", action="resp", page=2, has_previous=True, has_next=False
     )
     assert _data(markup) == ["v1:p:resp:1"]
+
+
+def test_vote_keyboard_allows_one_row_per_option() -> None:
+    render = PollRender(
+        text="x",
+        buttons=tuple(
+            PollButton(label=f"Option {index}", callback_data=f"v1:v:toggle:1_{index}")
+            for index in range(10)
+        ),
+    )
+    markup = vote_keyboard(render)
+    assert markup is not None
+    assert len(markup.inline_keyboard) == 10
+    assert all(len(row) == 1 for row in markup.inline_keyboard)
