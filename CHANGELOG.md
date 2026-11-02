@@ -29,7 +29,7 @@ All notable changes to this project are documented here. The format follows
 - Admin commands are DM-only and allowlist-only; vote callbacks are accepted from target-chat members
   and validated against the stored message, instance, and option.
 - The posting worker sends and edits bot-authored text messages instead of calling `sendPoll`.
-- The default test suite and fixtures were rewritten for the new model; 332 tests at 100% line and
+- The default test suite and fixtures were rewritten for the new model; 333 tests at 100% line and
   branch coverage.
 
 ### Removed
@@ -119,6 +119,10 @@ All notable changes to this project are documented here. The format follows
 
 - Retention is now scheduled: a daily 03:15 UTC APScheduler cron job runs `RetentionService`, records
   the deleted-row counters, and checkpoints the WAL; the planner ignores non-date jobs.
+
+- SPEC-002: buttons-first poll wizard — per-step inline controls, named chat selection with
+  pagination and selection markers, numbered option list and preview, callback routing with the
+  text shortcuts kept as a fallback.
 
 ### Changed
 
