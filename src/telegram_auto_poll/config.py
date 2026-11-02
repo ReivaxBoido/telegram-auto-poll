@@ -101,7 +101,7 @@ class Settings(BaseSettings):
     wizard_ttl_seconds: int = Field(default=900, ge=1)
 
     retention_days: int = Field(default=90, ge=1)
-    response_names_per_option: int = Field(default=10, ge=1, le=50)
+    response_names_per_option: int = Field(default=50, ge=1, le=50)
     response_update_debounce_seconds: float = Field(default=1.0, ge=0, le=10)
     votes_per_minute: int = Field(default=30, ge=1, le=120)
     response_retention_days: int = Field(default=90, ge=1, le=3650)

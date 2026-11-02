@@ -1,5 +1,22 @@
 """Pure rendering of the sign-up poll message (SPEC-003 FR-326 - FR-328).
 
+The layout follows CountMeInBot:
+
+```
+Wed training @ MPSH
+
+0700-1030 (11👥)
+Xavier
+rui
+...
+
+1045-1330 (16👥)
+Xavier
+...
+
+👥 19 people responded
+```
+
 The renderer knows nothing about Telegram beyond the callback payload shape: it returns text and
 ``PollButton`` objects. The bot adapter turns the buttons into an inline keyboard and encodes the
 callback data.
@@ -20,8 +37,9 @@ from .enums import InstanceStatus, PollStatus
 MAX_MESSAGE_LENGTH = 4_096
 BUTTON_LABEL_MAX = 60
 ELLIPSIS = "…"
-#: Name limits tried in order. The first value is the configured limit; the rest guarantee progress.
-NAME_LIMITS = (10, 5, 3, 1, 0)
+PEOPLE = "👥"
+#: Name limits tried in order. The configured limit is added first by ``_limits``.
+NAME_LIMITS = (50, 30, 20, 15, 10, 5, 3, 1, 0)
 
 
 def _truncate_button(label: str) -> str:
@@ -30,29 +48,24 @@ def _truncate_button(label: str) -> str:
     return label[: BUTTON_LABEL_MAX - 1] + ELLIPSIS
 
 
-def _names_text(respondents: Sequence[tuple[int, str]], limit: int) -> str:
-    if limit == 0 or not respondents:
-        return ""
-    names = [name for _, name in respondents[:limit]]
-    remaining = len(respondents) - len(names)
-    rendered = ", ".join(names)
-    if remaining > 0:
-        rendered += f", +{remaining} more"
-    return f" ({rendered})"
-
-
-def _option_line(position: int, option: OptionResponses, limit: int) -> str:
+def _option_lines(option: OptionResponses, limit: int) -> list[str]:
     count = len(option.respondents)
-    return f"{position}. {option.option.label} - {count}{_names_text(option.respondents, limit)}"
+    lines = [f"{option.option.label} ({count}{PEOPLE})"]
+    names = [name for _, name in option.respondents[:limit]]
+    lines.extend(names)
+    remaining = count - len(names)
+    if remaining > 0:
+        lines.append(f"... +{remaining} more")
+    return lines
 
 
 def _total_line(options: Sequence[OptionResponses]) -> str:
     distinct = {user_id for option in options for user_id, _ in option.respondents}
     if not distinct:
-        return "Nobody responded"
+        return f"{PEOPLE} Nobody responded"
     if len(distinct) == 1:
-        return "1 person responded"
-    return f"{len(distinct)} people responded"
+        return f"{PEOPLE} 1 person responded"
+    return f"{PEOPLE} {len(distinct)} people responded"
 
 
 def _render_text(
@@ -63,14 +76,14 @@ def _render_text(
     names_per_option: int,
     closed: bool,
 ) -> str:
-    header = [poll.title, f"Poll #{instance.id} · {'Voting closed' if closed else 'Voting open'}"]
-    body = [
-        _option_line(index + 1, option, names_per_option) for index, option in enumerate(options)
-    ]
-    footer = [_total_line(options)]
+    lines = [poll.title, ""]
+    for option in options:
+        lines.extend(_option_lines(option, names_per_option))
+        lines.append("")
+    lines.append(_total_line(options))
     if closed:
-        footer.append("Voting closed.")
-    return "\n".join([*header, "", *body, "", *footer])
+        lines.append("Voting closed.")
+    return "\n".join(lines)
 
 
 def _limits(names_per_option: int) -> tuple[int, ...]:

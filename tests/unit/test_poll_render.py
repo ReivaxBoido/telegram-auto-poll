@@ -30,9 +30,11 @@ def test_open_poll_renders_counts_names_and_buttons() -> None:
     )
 
     assert "Saturday football" in render.text
-    assert "1. In - 2 (Alice, Bob)" in render.text
-    assert "2. Out - 0" in render.text
-    assert "2 people responded" in render.text
+    assert "In (2👥)" in render.text
+    assert "Alice" in render.text
+    assert "Bob" in render.text
+    assert "Out (0👥)" in render.text
+    assert "👥 2 people responded" in render.text
     assert [button.callback_data for button in render.buttons] == [
         "v1:v:toggle:100_1",
         "v1:v:toggle:100_2",
@@ -43,12 +45,12 @@ def test_nobody_and_single_respondent_lines() -> None:
     nobody = render_poll_message(
         make_poll(status=PollStatus.ACTIVE), make_instance(), _options(), names_per_option=10
     )
-    assert "Nobody responded" in nobody.text
+    assert "👥 Nobody responded" in nobody.text
 
     single = render_poll_message(
         make_poll(status=PollStatus.ACTIVE), make_instance(), _options("Alice"), names_per_option=10
     )
-    assert "1 person responded" in single.text
+    assert "👥 1 person responded" in single.text
 
 
 def test_name_limit_and_more_marker() -> None:
@@ -60,7 +62,7 @@ def test_name_limit_and_more_marker() -> None:
     assert "Name 0" in render.text
     assert "Name 9" in render.text
     assert "Name 10" not in render.text
-    assert "+2 more" in render.text
+    assert "... +2 more" in render.text
 
 
 def test_closed_instance_has_no_buttons() -> None:
@@ -123,7 +125,7 @@ def test_zero_name_limit_renders_counts_only() -> None:
         _options("Alice"),
         names_per_option=0,
     )
-    assert "1. In - 1" in render.text
+    assert "In (1👥)" in render.text
     assert "Alice" not in render.text
 
 

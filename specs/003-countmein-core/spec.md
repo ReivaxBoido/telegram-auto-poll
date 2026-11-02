@@ -82,7 +82,7 @@ IDs are document-scoped and start at 301 to avoid colliding with SPEC-001/002.
 
 | ID | Requirement | Priority | Acceptance criteria |
 |---|---|---|---|
-| FR-301 | Configuration MUST add `RESPONSE_NAMES_PER_OPTION` (default 10), `RESPONSE_UPDATE_DEBOUNCE_SECONDS` (default 1.0), `VOTES_PER_MINUTE` (default 30), `RESPONSE_RETENTION_DAYS` (default 90), `MESSAGE_EDIT_CONCURRENCY` (default 4), `MESSAGE_EDIT_RETRY_ATTEMPTS` (default 3), `POSTING_TICK_SECONDS` (default 5), and `ALLOW_DESTRUCTIVE_MIGRATION` (default false), validating every value at startup. | P0 | Given an out-of-range value, when the process starts, then it exits non-zero and names the variable without printing a secret. |
+| FR-301 | Configuration MUST add `RESPONSE_NAMES_PER_OPTION` (default 50), `RESPONSE_UPDATE_DEBOUNCE_SECONDS` (default 1.0), `VOTES_PER_MINUTE` (default 30), `RESPONSE_RETENTION_DAYS` (default 90), `MESSAGE_EDIT_CONCURRENCY` (default 4), `MESSAGE_EDIT_RETRY_ATTEMPTS` (default 3), `POSTING_TICK_SECONDS` (default 5), and `ALLOW_DESTRUCTIVE_MIGRATION` (default false), validating every value at startup. | P0 | Given an out-of-range value, when the process starts, then it exits non-zero and names the variable without printing a secret. |
 | FR-302 | Migration `0002` MUST take the existing pre-migration backup, preserve `chats` and `audit_events`, and replace the native-poll tables (`polls`, `poll_targets`, `schedules`, `deliveries`) with the new schema. If any old table contains rows and `ALLOW_DESTRUCTIVE_MIGRATION` is not `true`, the migration MUST abort without changing data. | P0 | Given a 0001 database with poll rows and the flag unset, when migration runs, then it aborts and the backup remains. Given the flag set, then the new schema exists and `chats`/`audit_events` rows survive. |
 | FR-303 | Startup MUST recover interrupted posts: `sending` messages become `failed` with `ambiguous_outcome_after_restart`; `pending` messages remain claimable; `sent` messages are left untouched. | P0 | Given a `sending` row at startup, when recovery runs, then the row is `failed`, `completed_at` is set, and no send is attempted. |
 | FR-304 | Shutdown MUST stop accepting updates and new posts, flush pending response broadcasts for at most `SHUTDOWN_GRACE_SECONDS`, checkpoint WAL, release the lock, and exit 0. | P0 | Given a pending broadcast, when `SIGTERM` arrives, then the edit completes or is abandoned within the grace period and the process exits 0. |
@@ -122,7 +122,7 @@ IDs are document-scoped and start at 301 to avoid colliding with SPEC-001/002.
 
 | ID | Requirement | Priority | Acceptance criteria |
 |---|---|---|---|
-| FR-326 | The renderer MUST show the title, each numbered option with its count and up to `RESPONSE_NAMES_PER_OPTION` first names, `+N more` when truncated, and the total distinct respondents. It MUST use plain text, no parse mode. | P0 | Given 12 names and a limit of 10, then 10 names and `+2 more` are shown. |
+| FR-326 | The renderer MUST show the title, each option as `label (N👥)` followed by up to `RESPONSE_NAMES_PER_OPTION` first names on separate lines, `... +N more` when truncated, and a final `👥 N people responded` line. It MUST use plain text, no parse mode. | P0 | Given 12 names and a limit of 10, then 10 names and `... +2 more` are shown. |
 | FR-327 | The rendered text MUST never exceed 4,096 characters. If it would, the renderer MUST reduce the number of names per option (10 → 5 → 3 → 1 → 0) until it fits. It MUST NOT silently truncate the title or option labels. | P0 | Given 10 options with 10 long names each, then the output is ≤4,096 and the title/options are intact. |
 | FR-328 | A closed instance MUST render `Voting closed.` and no keyboard. A deleted poll MUST render `This poll was deleted.` with no names and no keyboard. | P0 | Given each state, then the exact rendering is produced and the keyboard is absent. |
 | FR-329 | Message edits MUST treat Telegram `message is not modified` as success, mark `message to edit not found` as `missing`, honour `429 retry_after` (clamped to 300 s), and retry 5xx/timeouts with bounded backoff. | P0 | Given each error, then the expected status/retry is recorded and no unhandled exception escapes. |
@@ -262,16 +262,22 @@ Every step has **Back** and **Cancel**. Invalid input re-prompts without losing 
 ### 8.4 Poll message and vote keyboard
 
 ```
-Saturday football
-Poll #12 · Voting open
+Wed training @ MPSH
 
-1. In — 3 (Alice, Bob, Carol)
-2. Out — 1 (Dave)
-3. Maybe — 0
+0700-1030 (2👥)
+Alice
+Bob
 
-4 people responded
+1045-1330 (1👥)
+Carol
+
+👥 3 people responded
 ```
 
+- The title is the first line, followed by a blank line.
+- Each option is rendered as `label (N👥)`, then one first name per line, then a blank line.
+- When an option has more names than the display limit, the last line is `... +N more`.
+- The footer is `👥 N people responded` (or `👥 1 person responded`, `👥 Nobody responded`).
 - One button per option, two per row (maximum 5 rows for 10 options).
 - Button text is the option label truncated to 60 characters with `…`; the message shows the full label.
 - Closed: `Voting closed.` and no keyboard.

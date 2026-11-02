@@ -119,7 +119,7 @@ New settings (defaults in parentheses):
 
 | Variable | Default | Validation |
 |---|---|---|
-| `RESPONSE_NAMES_PER_OPTION` | 10 | 1–50 |
+| `RESPONSE_NAMES_PER_OPTION` | 50 | 1–50 |
 | `RESPONSE_UPDATE_DEBOUNCE_SECONDS` | 1.0 | 0–10; 0 means edit immediately |
 | `VOTES_PER_MINUTE` | 30 | 1–120 |
 | `RESPONSE_RETENTION_DAYS` | 90 | 1–3650 |

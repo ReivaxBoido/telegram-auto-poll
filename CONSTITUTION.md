@@ -1069,7 +1069,7 @@ value.
 | `CLOCK_SKEW_WARNING_SECONDS` | No | `60` | 1–3600; log a warning beyond this skew. |
 | `BOT_POLL_TIMEOUT_SECONDS` | No | `30` | 1–60; long-polling timeout. |
 | `WIZARD_TTL_SECONDS` | No | `900` | 60–3600; inactive wizard expiry. |
-| `RESPONSE_NAMES_PER_OPTION` | No | `10` | 1–50; names shown per option before `+N more`. |
+| `RESPONSE_NAMES_PER_OPTION` | No | `50` | 1–50; names shown per option before `... +N more`. |
 | `RESPONSE_UPDATE_DEBOUNCE_SECONDS` | No | `1.0` | 0–10; coalesce vote edits. |
 | `VOTES_PER_MINUTE` | No | `30` | 1–120; per-user vote budget. |
 | `RESPONSE_RETENTION_DAYS` | No | `90` | 1–3650; closed/deleted response retention. |

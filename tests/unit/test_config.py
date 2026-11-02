@@ -20,7 +20,7 @@ def _env(**overrides: str) -> dict[str, str]:
 def test_defaults_and_new_settings() -> None:
     settings = load_settings(_env())
 
-    assert settings.response_names_per_option == 10
+    assert settings.response_names_per_option == 50
     assert settings.response_update_debounce_seconds == 1.0
     assert settings.votes_per_minute == 30
     assert settings.response_retention_days == 90
