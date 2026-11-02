@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 
 SERVICE_NAME = "telegram-auto-poll"
 
-_TOKEN_PATTERN = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{20,}\b")
+_TOKEN_PATTERN = re.compile(r"\d{6,}:[A-Za-z0-9_-]{20,}\b")
 _REDACTED = "[redacted]"
 
 CONSOLE_FORMAT = "%(asctime)s %(levelname)-8s %(name)s %(message)s"
@@ -100,3 +100,8 @@ def configure_logging(
         root.removeHandler(existing)
     root.addHandler(handler)
     root.setLevel(level.upper())
+    # Third-party request loggers can print the Bot API URL, which contains the token. The
+    # formatter redacts it, but keeping these loggers at WARNING avoids writing it at all.
+    third_party_level = max(logging.WARNING, root.level)
+    for name in ("httpx", "httpcore", "telegram"):
+        logging.getLogger(name).setLevel(third_party_level)

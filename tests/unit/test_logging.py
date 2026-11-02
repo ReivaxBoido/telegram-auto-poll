@@ -37,6 +37,13 @@ def test_redact_removes_token_shaped_text() -> None:
     assert redact("nothing secret") == "nothing secret"
 
 
+def test_redact_removes_a_token_embedded_in_a_bot_api_url() -> None:
+    url = f"HTTP Request: POST https://api.telegram.org/bot{TOKEN}/getMe"
+    redacted = redact(url)
+    assert TOKEN not in redacted
+    assert "[redacted]" in redacted
+
+
 def test_json_lines_carry_every_required_field() -> None:
     formatter = JsonFormatter(version="0.1.0", environment="production")
 
@@ -96,6 +103,8 @@ def test_configure_logging_installs_one_json_handler() -> None:
         assert len(root.handlers) == 1
         handler = root.handlers[0]
         assert isinstance(handler.formatter, JsonFormatter)
+        assert logging.getLogger("httpx").level == logging.WARNING
+        assert logging.getLogger("httpcore").level == logging.WARNING
     finally:
         for handler in list(root.handlers):
             root.removeHandler(handler)
