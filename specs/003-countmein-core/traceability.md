@@ -84,3 +84,21 @@ services; `tests/unit/test_validation.py`, `tests/unit/test_poll_render.py`,
 - **NFR-307/308/309** are not benchmarked in this environment; they remain operator checks.
 - **SPEC-002** is superseded by issue #7. Its branch is not merged; its button components informed the
   new wizard and target selector.
+
+## Governance evidence (Step 11)
+
+| Check | Result |
+|---|---|
+| `ruff format --check .` | Pass |
+| `ruff check .` | Pass |
+| `mypy src` | Pass (`strict`) |
+| `pytest --cov --cov-branch --cov-fail-under=100` | 333 passed, 100% line and branch |
+| `bandit -r src` | No issues |
+| `pip-audit` | No known vulnerabilities; the private local package is skipped (not on PyPI) |
+| `gitleaks detect --no-git` | No leaks (`.gitleaks.toml` allowlists local `.env` and caches) |
+| `gitleaks detect` (full history) | No leaks (34 commits) |
+| `docker build` | Pass |
+| Container health | `/healthz` 200 (`database: true`, `worker: true`) |
+| Trivy image scan | 45 HIGH, 0 CRITICAL, 0 fixable; **risk-accepted until 2026-12-31** — see [`docs/security/risk-acceptance-2026-11-02.md`](../../docs/security/risk-acceptance-2026-11-02.md), follow-up #8 |
+| CodeQL | CI-only; not run locally |
+
