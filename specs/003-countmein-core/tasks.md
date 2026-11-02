@@ -258,7 +258,7 @@ Order is dependency order. Check a task only when its acceptance check passes in
   - Acceptance: gitleaks, bandit, pip-audit, CodeQL, Trivy green or risk-accepted with an expiry.
   - Covers: constitution §11.6.
 
-- [ ] **T-039** (review) Reconcile code against the spec and request G4.
+- [x] **T-039** (review) Reconcile code against the spec and request G4.
   - Files: `specs/003-countmein-core/traceability.md`
   - Acceptance: every FR/NFR and invariant mapped to code and tests; deviations documented; G4
     approval recorded.
@@ -276,5 +276,5 @@ Order is dependency order. Check a task only when its acceptance check passes in
 | 2026-11-02 | T-001–T-004 | Complete | Constitution v2.0.0, ADR-0003/0004, SPEC-002 superseded, README alpha status. |
 | 2026-11-02 | T-005–T-032 | Complete | Implementation and tests; 333 tests at 100% line and branch. |
 | 2026-11-02 | T-033–T-038 | Complete | Docs, Docker/CI, G3 approved, governance checks and risk acceptance. |
-| 2026-11-02 | T-039 | Pending | G4 reconciliation requested. |
+| 2026-11-02 | T-039 | Complete | G4 approved. |
 | 2026-11-02 | T-040 | Pending | PR after G4. |

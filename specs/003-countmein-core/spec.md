@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Spec ID | SPEC-003 |
-| Status | Review — G3 approved; governance complete; G4 requested |
+| Status | Reconciled — G4 approved 2026-11-02 |
 | Owner | @ReivaxBoido |
 | Issue | #7 |
 | Plan | [`plan.md`](plan.md) — awaiting G2 |
@@ -470,8 +470,8 @@ All values are integers or short enum tokens; every generated callback is ≤64 
 |---|---|---|---|---|
 | G1 | Clarifications (§14) | @ReivaxBoido | 2026-11-02 | issue #7, comment 6561766212 |
 | G2 | `spec.md`, `plan.md`, `tasks.md`, constitution amendment, ADR-0003/0004 | @ReivaxBoido | 2026-11-02 | "gate 1 approved. gate 2 approved" |
-| G3 | Code review | | | |
-| G4 | Reconciliation | | | |
+| G3 | Code review | @ReivaxBoido | 2026-11-02 | "gate 3 approved" |
+| G4 | Reconciliation | @ReivaxBoido | 2026-11-02 | "gate 4 approved" |
 
 ## 17. Roadmap and supersession
 
