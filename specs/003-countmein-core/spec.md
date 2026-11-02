@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Spec ID | SPEC-003 |
-| Status | Approved — G2 approved 2026-11-02 |
+| Status | Review — G3 approved; governance complete; G4 requested |
 | Owner | @ReivaxBoido |
 | Issue | #7 |
 | Plan | [`plan.md`](plan.md) — awaiting G2 |

@@ -5,7 +5,7 @@
 | Spec | [`spec.md`](spec.md) |
 | Plan | [`plan.md`](plan.md) |
 | Tasks | [`tasks.md`](tasks.md) |
-| Status | Implementation complete; G3 review requested |
+| Status | G3 approved; governance complete; G4 requested |
 
 ## Functional requirements
 
