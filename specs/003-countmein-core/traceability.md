@@ -5,7 +5,7 @@
 | Spec | [`spec.md`](spec.md) |
 | Plan | [`plan.md`](plan.md) |
 | Tasks | [`tasks.md`](tasks.md) |
-| Status | Reconciled — G4 approved 2026-11-02 |
+| Status | Delivered — PR #9 (squash `f81d012`) |
 
 ## Functional requirements
 

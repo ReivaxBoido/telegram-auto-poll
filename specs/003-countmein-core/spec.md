@@ -3,13 +3,13 @@
 | Field | Value |
 |---|---|
 | Spec ID | SPEC-003 |
-| Status | Reconciled — G4 approved 2026-11-02 |
+| Status | Delivered — merged 2026-11-03 |
 | Owner | @ReivaxBoido |
 | Issue | #7 |
 | Plan | [`plan.md`](plan.md) — awaiting G2 |
 | Tasks | [`tasks.md`](tasks.md) — awaiting G2 |
 | Target release | v0.3.0-alpha (core milestone; scheduling returns in SPEC-004 / v0.4.0) |
-| Delivered in | TBD |
+| Delivered in | v0.3.0-alpha / PR #9 (squash `f81d012`) |
 | Supersedes | The native-poll direction of SPEC-001 and SPEC-002 (see §17) |
 
 > **Gate status:** G1 approved and G2 approved on 2026-11-02. Implementation may begin under the task
