@@ -9,6 +9,8 @@ consequences. ADRs are immutable. To change a decision, add a new ADR that super
 |---|---|---|
 | [0001](0001-technology-stack.md) | Technology stack and runtime architecture | Accepted |
 | [0002](0002-telegram-only-admin-interface.md) | Telegram-only administration, no web UI | Accepted |
+| [0003](0003-countmein-product-pivot.md) | Product pivot to CountMeIn-style sign-up polls | Accepted |
+| [0004](0004-participant-callback-authorization.md) | Participant callback authorization for sign-up polls | Accepted |
 
 ## Process
 

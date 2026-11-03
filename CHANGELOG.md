@@ -4,6 +4,45 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0-alpha] - 2026-11-02
+
+### Added
+
+- CountMeIn-style sign-up polls (SPEC-003): a title plus 1–10 options, published to registered chats,
+  with one inline button per option.
+- Participant voting: any member of a target chat can add or remove their own first name; responses
+  are multi-select and global to a poll instance.
+- Live message editing through a coalescing broadcaster with bounded concurrency, `429` handling, and
+  a `missing` state when Telegram no longer has the message.
+- Poll lifecycle: close, reopen, refresh, and soft-delete with response removal and message redaction.
+- New schema: `polls`, `poll_options`, `poll_instances`, `poll_messages`, `poll_responses`; migration
+  `0002_countmein_core` with a destructive-reset guard and pre-migration backup.
+- Response retention (`RESPONSE_RETENTION_DAYS`) with redaction before deletion.
+- New metrics for polls, instances, messages, votes, rejections, edits, coalescing, and vote-to-edit
+  latency; `/healthz` now checks the posting-worker heartbeat.
+- ADR-0003 (product pivot) and ADR-0004 (participant callback authorization); proposed constitution
+  v2.0.0 amendment.
+
+### Changed
+
+- The product is now a private CountMeIn-style sign-up bot, not a native Telegram poll scheduler.
+- Admin commands are DM-only and allowlist-only; vote callbacks are accepted from target-chat members
+  and validated against the stored message, instance, and option.
+- The posting worker sends and edits bot-authored text messages instead of calling `sendPoll`.
+- The default test suite and fixtures were rewritten for the new model; 333 tests at 100% line and
+  branch coverage.
+
+### Removed
+
+- Native `sendPoll` delivery, the native poll wizard, schedule commands, and the schedule planner.
+  Scheduling returns in SPEC-004 / v0.4.0.
+
+### Migration
+
+- `0002_countmein_core` drops the native-poll tables. It aborts if they contain rows unless
+  `ALLOW_DESTRUCTIVE_MIGRATION=true` is set for one run after a verified backup. Rollback requires
+  restoring the pre-migration backup and the previous image.
+
 ## [Unreleased]
 
 ### Added

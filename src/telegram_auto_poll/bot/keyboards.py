@@ -1,4 +1,4 @@
-"""Inline keyboards with the layout limits from spec §8.4 (at most 8 rows, 4 buttons per row)."""
+"""Inline keyboards with the layout limits from spec §8.6 (at most 8 rows, 4 buttons per row)."""
 
 from __future__ import annotations
 
@@ -6,46 +6,43 @@ from collections.abc import Sequence
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from ..domain.entities import Chat
-from ..services.pagination import Page
-from .callbacks import (
-    WIZARD_ANONYMITY,
-    WIZARD_BACK,
-    WIZARD_CANCEL,
-    WIZARD_CONFIRM,
-    WIZARD_DONE,
-    WIZARD_KIND,
-    WIZARD_MULTIPLE,
-    WIZARD_NEXT,
-    WIZARD_OPTION_REMOVE,
-    WIZARD_SKIP,
-    WIZARD_TARGET,
-    WIZARD_TARGET_PAGE,
-    WIZARD_WEEKDAY,
+from ..domain.callbacks import (
+    confirm,
     encode,
+    poll_action,
+    target_done,
+    target_page,
+    target_toggle,
     wizard_action,
 )
-from .wizards.states import WizardState, WizardStep
+from ..domain.entities import Chat, Poll, PollInstance, PollRender
+from ..domain.enums import InstanceStatus, PollStatus
+from ..domain.poll_render import keyboard_rows
 
 MAX_ROWS = 8
+VOTE_MAX_ROWS = 10
 MAX_BUTTONS_PER_ROW = 4
+TARGET_PAGE_SIZE = 6
+CHAT_LABEL_MAX = 40
+
+Button = tuple[str, str]
 
 
 class KeyboardLayoutError(ValueError):
     """A keyboard exceeds Telegram's or the spec's layout limits."""
 
 
-Button = tuple[str, str]
-
-
-def build_keyboard(rows: Sequence[Sequence[Button]]) -> InlineKeyboardMarkup:
+def build_keyboard(
+    rows: Sequence[Sequence[Button]], *, max_rows: int = MAX_ROWS
+) -> InlineKeyboardMarkup:
     """Build a keyboard, validating the row and button counts first.
 
     Raises:
-        KeyboardLayoutError: more than 8 rows, an empty row, or more than 4 buttons in a row.
+        KeyboardLayoutError: more than ``max_rows`` rows, an empty row, or more than 4 buttons in a
+            row. The vote keyboard uses one row per option and allows up to ``VOTE_MAX_ROWS``.
     """
-    if len(rows) > MAX_ROWS:
-        raise KeyboardLayoutError(f"at most {MAX_ROWS} rows are allowed (got {len(rows)})")
+    if len(rows) > max_rows:
+        raise KeyboardLayoutError(f"at most {max_rows} rows are allowed (got {len(rows)})")
     built: list[list[InlineKeyboardButton]] = []
     for row in rows:
         if not row:
@@ -58,12 +55,19 @@ def build_keyboard(rows: Sequence[Sequence[Button]]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(built)
 
 
+def vote_keyboard(render: PollRender) -> InlineKeyboardMarkup | None:
+    """Build the participant keyboard from a rendered poll, or ``None`` when closed."""
+    rows = keyboard_rows(render)
+    if not rows:
+        return None
+    return build_keyboard(rows, max_rows=VOTE_MAX_ROWS)
+
+
 def confirmation_keyboard(
     *,
     entity: str,
     entity_id: int,
-    confirm_action: str,
-    namespace: str = "p",
+    confirm_action: str = "confirm",
     confirm_label: str = "Confirm",
     cancel_label: str = "Cancel",
 ) -> InlineKeyboardMarkup:
@@ -71,8 +75,8 @@ def confirmation_keyboard(
     return build_keyboard(
         [
             [
-                (confirm_label, encode(namespace, confirm_action, f"{entity}_{entity_id}")),
-                (cancel_label, encode("w", "cancel", entity)),
+                (confirm_label, confirm(confirm_action, entity_id)),
+                (cancel_label, wizard_action("cancel", entity)),
             ]
         ]
     )
@@ -98,120 +102,67 @@ def pagination_keyboard(
     return build_keyboard([row])
 
 
+def poll_detail_keyboard(poll: Poll, latest: PollInstance | None) -> InlineKeyboardMarkup:
+    """Actions available from ``/poll <id>``."""
+    poll_id = poll.id or 0
+    rows: list[list[Button]] = []
+    if poll.status is not PollStatus.DELETED:
+        rows.append([("Publish", poll_action("pub", poll_id))])
+    if latest is not None and latest.status is InstanceStatus.OPEN:
+        rows.append([("Close", poll_action("close", poll_id))])
+    elif latest is not None and latest.status is InstanceStatus.CLOSED:
+        rows.append([("Reopen", poll_action("reopen", poll_id))])
+    if latest is not None:
+        rows.append(
+            [
+                ("Refresh", poll_action("ref", poll_id)),
+                ("Responses", poll_action("resp", poll_id)),
+            ]
+        )
+    if poll.status is not PollStatus.DELETED:
+        rows.append([("Delete", poll_action("del", poll_id))])
+    return build_keyboard(rows)
+
+
+def target_keyboard(
+    *,
+    poll_id: int,
+    chats: Sequence[Chat],
+    selected: frozenset[int],
+    page: int,
+    has_previous: bool,
+    has_next: bool,
+) -> InlineKeyboardMarkup:
+    """Target selection: six chats per page, one row each, plus navigation and actions."""
+    rows: list[list[Button]] = []
+    for chat in chats:
+        marker = "[x]" if (chat.id or 0) in selected else "[ ]"
+        label = _chat_label(chat)
+        rows.append([(f"{marker} {label}", target_toggle(poll_id, chat.id or 0))])
+    navigation: list[Button] = []
+    if has_previous:
+        navigation.append(("Previous", target_page(poll_id, page - 1)))
+    if has_next:
+        navigation.append(("Next", target_page(poll_id, page + 1)))
+    if navigation:
+        rows.append(navigation)
+    rows.append(
+        [
+            ("Done", target_done(poll_id)),
+            ("Cancel", encode("t", "cancel", poll_id)),
+        ]
+    )
+    return build_keyboard(rows)
+
+
+def _chat_label(chat: Chat) -> str:
+    label = f"{chat.title} ({chat.type})"
+    if len(label) <= CHAT_LABEL_MAX:
+        return label
+    return label[: CHAT_LABEL_MAX - 1] + "…"
+
+
 def _paged(namespace: str, action: str, page: int, argument: str | int | None) -> str:
     if argument is None:
         return encode(namespace, action, page)
     return encode(namespace, action, f"{argument}_{page}")
-
-
-WIZARD_CHAT_PAGE_SIZE = 6
-MAX_BUTTON_TEXT = 64
-WEEKDAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-
-
-def chat_button_label(chat: Chat, *, selected: bool) -> str:
-    """Label a target chat with a selected marker, its title, and its Telegram id."""
-    marker = "\u2705 " if selected else ""
-    suffix = f" ({chat.telegram_chat_id})"
-    budget = MAX_BUTTON_TEXT - len(marker) - len(suffix) - 1
-    title = chat.title
-    if len(title) > budget:
-        title = title[: max(budget - 1, 1)].rstrip() + "\u2026"
-    return f"{marker}{title}{suffix}"
-
-
-def _navigation() -> list[tuple[str, str]]:
-    return [
-        ("\u2b05 Back", wizard_action(WIZARD_BACK)),
-        ("\u2716 Cancel", wizard_action(WIZARD_CANCEL)),
-    ]
-
-
-def wizard_keyboard(
-    state: WizardState, *, chat_page: Page[Chat] | None = None
-) -> InlineKeyboardMarkup:
-    """Build the inline keyboard for the current wizard step."""
-    step = state.step
-    rows: list[list[Button]] = []
-
-    if step in {
-        WizardStep.QUESTION,
-        WizardStep.SCHEDULE_DAY,
-        WizardStep.SCHEDULE_TIME,
-        WizardStep.SCHEDULE_RUN_AT,
-    }:
-        rows.append(_navigation())
-    elif step is WizardStep.DESCRIPTION:
-        rows.append([("Skip", wizard_action(WIZARD_SKIP)), *_navigation()])
-    elif step is WizardStep.OPTIONS:
-        remove = [
-            (f"Remove {index + 1}", wizard_action(WIZARD_OPTION_REMOVE, index))
-            for index in range(len(state.options))
-        ]
-        rows.extend([remove[index : index + 4] for index in range(0, len(remove), 4)])
-        rows.append([("\u2714 Done", wizard_action(WIZARD_DONE)), *_navigation()])
-    elif step is WizardStep.ANONYMITY:
-        label = "Anonymous: \u2705" if state.is_anonymous else "Anonymous: \u274c"
-        rows.append(
-            [(label, wizard_action(WIZARD_ANONYMITY)), ("Next", wizard_action(WIZARD_NEXT))]
-        )
-        rows.append(_navigation())
-    elif step is WizardStep.MULTIPLE:
-        label = "Multiple: \u2705" if state.allows_multiple_answers else "Single: \u274c"
-        rows.append([(label, wizard_action(WIZARD_MULTIPLE)), ("Next", wizard_action(WIZARD_NEXT))])
-        rows.append(_navigation())
-    elif step is WizardStep.TARGETS and chat_page is not None:
-        for chat in chat_page.items:
-            rows.append(
-                [
-                    (
-                        chat_button_label(chat, selected=chat.id in state.targets),
-                        wizard_action(WIZARD_TARGET, chat.id),
-                    )
-                ]
-            )
-        nav: list[Button] = []
-        if chat_page.has_previous:
-            nav.append(("\u25c0 Previous", wizard_action(WIZARD_TARGET_PAGE, chat_page.number - 1)))
-        if chat_page.has_next:
-            nav.append(("Next \u25b6", wizard_action(WIZARD_TARGET_PAGE, chat_page.number + 1)))
-        if nav:
-            rows.append(nav)
-        rows.append([("\u2714 Done", wizard_action(WIZARD_DONE)), *_navigation()])
-    elif step is WizardStep.SCHEDULE_KIND:
-        rows.extend(
-            [
-                [
-                    ("Daily", wizard_action(WIZARD_KIND, "daily")),
-                    ("Weekly", wizard_action(WIZARD_KIND, "weekly")),
-                ],
-                [
-                    ("Monthly", wizard_action(WIZARD_KIND, "monthly")),
-                    ("One-off", wizard_action(WIZARD_KIND, "once")),
-                ],
-                [("Save without schedule", wizard_action(WIZARD_KIND, "none"))],
-                _navigation(),
-            ]
-        )
-    elif step is WizardStep.SCHEDULE_WEEKDAYS:
-        days = [
-            (
-                f"{'\u2705 ' if day in state.weekdays else ''}{WEEKDAY_NAMES[day - 1]}",
-                wizard_action(WIZARD_WEEKDAY, day),
-            )
-            for day in range(1, 8)
-        ]
-        rows.extend([days[:4], days[4:]])
-        rows.append([("\u2714 Done", wizard_action(WIZARD_DONE)), *_navigation()])
-    elif step in {WizardStep.SCHEDULE_TIMEZONE, WizardStep.SCHEDULE_START, WizardStep.SCHEDULE_END}:
-        rows.append([("Skip", wizard_action(WIZARD_SKIP)), *_navigation()])
-    elif step is WizardStep.PREVIEW:
-        rows.append(
-            [
-                ("\u2705 Create poll", wizard_action(WIZARD_CONFIRM)),
-                ("\u2b05 Back", wizard_action(WIZARD_BACK)),
-                ("\u2716 Cancel", wizard_action(WIZARD_CANCEL)),
-            ]
-        )
-
-    return build_keyboard(rows)

@@ -1,197 +1,321 @@
-"""Poll creation, listing, and detail (FR-116, FR-119).
-
-A poll, its targets, and an optional first schedule are committed in one transaction, together with
-their audit events (FR-116, FR-134). Validation runs before anything is written; a failure after the
-insert therefore rolls the poll back rather than leaving a half-created definition.
-"""
+"""Poll lifecycle, listing, and response inspection (SPEC-003 FR-306 - FR-316)."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date, datetime, time
-from typing import cast
+from dataclasses import dataclass, replace
+from math import ceil
 
-from ..db.uow import UnitOfWork
-from ..domain.entities import AuditEvent, Poll, Schedule
-from ..domain.enums import AuditAction, ScheduleKind
+from ..db.uow import Repositories, UnitOfWork
+from ..domain.entities import (
+    AuditEvent,
+    BroadcastResult,
+    Poll,
+    PollInstance,
+    PollOption,
+)
+from ..domain.enums import AuditAction, InstanceStatus, PollStatus, SkipReason
 from ..domain.errors import NotFoundError, ValidationError
 from ..domain.ports import Clock
-from ..domain.schedule_math import next_occurrence, next_occurrences
+from .broadcaster import ResponseBroadcaster
 from .pagination import PAGE_SIZE, Page, offset_for
 
-
-@dataclass(frozen=True, slots=True)
-class ScheduleDraft:
-    """The schedule fields the wizard collected, before validation by ``Schedule.create``."""
-
-    kind: ScheduleKind
-    timezone: str
-    time_of_day: time | None = None
-    weekdays: tuple[int, ...] = ()
-    day_of_month: int | None = None
-    run_at: datetime | None = None
-    start_date: date | None = None
-    end_date: date | None = None
+RESPONSE_PAGE_SIZE = 20
 
 
 @dataclass(frozen=True, slots=True)
-class CreatedPoll:
-    """What a successful wizard confirmation produced."""
+class PollSummary:
+    """One row of ``/polls``."""
 
     poll: Poll
-    schedule: Schedule | None
-
-
-@dataclass(frozen=True, slots=True)
-class ScheduleView:
-    """A schedule with the occurrences the detail screens display (FR-123)."""
-
-    schedule: Schedule
-    next_runs: tuple[datetime, ...]
+    latest_instance: PollInstance | None
+    response_count: int
 
 
 @dataclass(frozen=True, slots=True)
 class PollDetail:
+    """The detail screen for one poll."""
+
     poll: Poll
-    schedules: tuple[ScheduleView, ...]
+    latest_instance: PollInstance | None
+    counts: dict[int, int]
+    total_respondents: int
+
+
+@dataclass(frozen=True, slots=True)
+class ResponsePage:
+    """One page of names for one option."""
+
+    poll: Poll
+    instance: PollInstance
+    option: PollOption
+    names: tuple[str, ...]
+    number: int
+    pages: int
+    total: int
+
+
+@dataclass(frozen=True, slots=True)
+class RefreshResult:
+    """What ``/refresh`` retried and re-rendered."""
+
+    instance_id: int
+    retried: int
+    broadcast: BroadcastResult
 
 
 class PollService:
-    """Creates and reads poll definitions."""
+    """Creates and manages polls, instances, and response views."""
 
-    def __init__(self, *, uow: UnitOfWork, clock: Clock, page_size: int = PAGE_SIZE) -> None:
+    def __init__(
+        self,
+        *,
+        uow: UnitOfWork,
+        clock: Clock,
+        broadcaster: ResponseBroadcaster,
+        page_size: int = PAGE_SIZE,
+    ) -> None:
         self._uow = uow
         self._clock = clock
+        self._broadcaster = broadcaster
         self._page_size = page_size
 
     async def create(
         self,
         *,
         actor_user_id: int,
-        question: str,
+        title: str,
         options: tuple[str, ...] | list[str],
-        target_chat_ids: tuple[int, ...] | list[int],
-        description: str | None = None,
-        is_anonymous: bool = True,
-        allows_multiple_answers: bool = False,
-        schedule: ScheduleDraft | None = None,
-    ) -> CreatedPoll:
-        """Persist a poll, its targets, and an optional schedule atomically.
-
-        Raises:
-            ValidationError: invalid content, no target, an inactive target, or an invalid schedule.
-        """
+    ) -> Poll:
+        """Validate and persist a draft poll with its options and audit event."""
         now = self._clock.now()
-        targets = tuple(sorted(set(target_chat_ids)))
-        if not targets:
-            raise ValidationError("targets", "select at least one active chat")
-        poll = Poll.create(
-            question=question,
+        candidate = Poll.create(
+            title=title,
             options=options,
-            description=description,
-            is_anonymous=is_anonymous,
-            allows_multiple_answers=allows_multiple_answers,
-            targets=targets,
+            created_by=actor_user_id,
             now=now,
         )
-
         async with self._uow() as repos:
-            active = await repos.chats.active_ids()
-            unavailable = sorted(set(targets) - active)
-            if unavailable:
-                raise ValidationError(
-                    "targets",
-                    f"chat {unavailable[0]} is not registered or is inactive",
-                )
-
-            stored = await repos.polls.add(poll, now=now)
+            stored = await repos.polls.add(candidate, now=now)
             await repos.audit.add(
                 AuditEvent(
                     actor_user_id=actor_user_id,
-                    action=AuditAction.POLL_CREATE,
+                    action=AuditAction.POLL_CREATE.value,
                     entity_type="poll",
                     entity_id=stored.id or 0,
-                    details={
-                        "question": stored.question,
-                        "option_count": len(stored.options),
-                        "targets": list(stored.targets),
-                    },
+                    details={"title": stored.title, "option_count": len(stored.options)},
                     created_at=now,
                 ),
                 now=now,
             )
+        return stored
 
-            stored_schedule: Schedule | None = None
-            if schedule is not None:
-                candidate = Schedule.create(
-                    poll_id=cast("int", stored.id),
-                    kind=schedule.kind,
-                    timezone=schedule.timezone,
-                    time_of_day=schedule.time_of_day,
-                    weekdays=schedule.weekdays,
-                    day_of_month=schedule.day_of_month,
-                    run_at=schedule.run_at,
-                    start_date=schedule.start_date,
-                    end_date=schedule.end_date,
-                    now=now,
-                )
-                stored_schedule = await repos.schedules.add(candidate, now=now)
-                await repos.audit.add(
-                    AuditEvent(
-                        actor_user_id=actor_user_id,
-                        action=AuditAction.SCHEDULE_CREATE,
-                        entity_type="schedule",
-                        entity_id=stored_schedule.id or 0,
-                        details={
-                            "poll_id": stored.id,
-                            "kind": stored_schedule.kind.value,
-                            "timezone": stored_schedule.timezone,
-                        },
-                        created_at=now,
-                    ),
-                    now=now,
-                )
-
-        return CreatedPoll(poll=stored, schedule=stored_schedule)
-
-    async def page(self, number: int, *, active_only: bool = True) -> Page[Poll]:
-        """Return one page of poll summaries, oldest first."""
+    async def page(self, number: int) -> Page[PollSummary]:
+        """Return one page of polls with their latest instance and response count."""
         offset = offset_for(number, self._page_size)
         async with self._uow() as repos:
-            total = await repos.polls.count(active_only=active_only)
-            items = await repos.polls.list_all(
-                active_only=active_only, limit=self._page_size, offset=offset
-            )
-        return Page.create(items, number=number, size=self._page_size, total=total)
+            total = await repos.polls.count()
+            polls = await repos.polls.list_all(limit=self._page_size, offset=offset)
+            summaries = [
+                PollSummary(
+                    poll=poll,
+                    latest_instance=await repos.instances.latest_for_poll(poll.id or 0),
+                    response_count=await self._response_count(repos, poll.id or 0),
+                )
+                for poll in polls
+            ]
+        return Page.create(summaries, number=number, total=total, size=self._page_size)
 
     async def detail(self, poll_id: int) -> PollDetail:
-        """Return the poll with its schedules and their next five occurrences.
-
-        Raises:
-            NotFoundError: no poll has that id.
-        """
-        now = self._clock.now()
+        """Return a poll with its latest instance and per-option counts."""
         async with self._uow() as repos:
-            poll = await repos.polls.get(poll_id)
-            if poll is None:
-                raise NotFoundError(f"poll {poll_id} does not exist")
-            schedules = await repos.schedules.list_all(poll_id=poll_id)
-
+            poll = await self._require_poll(repos, poll_id)
+            latest = await repos.instances.latest_for_poll(poll_id)
+            counts = (
+                await repos.responses.counts_by_option(latest.id or 0) if latest is not None else {}
+            )
+            total = (
+                await repos.responses.count_for_instance(latest.id or 0)
+                if latest is not None
+                else 0
+            )
         return PollDetail(
             poll=poll,
-            schedules=tuple(
-                ScheduleView(
-                    schedule=schedule,
-                    next_runs=tuple(
-                        next_occurrences(schedule, after=now, count=5)
-                        if not schedule.is_paused
-                        else ()
-                    ),
-                )
-                for schedule in schedules
-            ),
+            latest_instance=latest,
+            counts=counts,
+            total_respondents=total,
         )
 
-    async def next_run(self, schedule: Schedule) -> datetime | None:
-        """Return the next occurrence of a schedule from now, or ``None`` when it has none."""
-        return next_occurrence(schedule, after=self._clock.now())
+    async def close(self, poll_id: int, *, actor_user_id: int) -> PollInstance:
+        """Close the latest open instance and skip its pending messages."""
+        now = self._clock.now()
+        async with self._uow() as repos:
+            poll = await self._require_poll(repos, poll_id)
+            instance = await repos.instances.latest_with_status(poll_id, InstanceStatus.OPEN)
+            if instance is None:
+                raise NotFoundError(f"poll {poll_id} has no open instance")
+            await repos.instances.set_status(
+                instance.id or 0,
+                InstanceStatus.CLOSED,
+                now=now,
+                closed_at=now,
+            )
+            await repos.messages.skip_pending_for_instance(
+                instance.id or 0,
+                SkipReason.INSTANCE_CLOSED.value,
+                now=now,
+            )
+            await repos.audit.add(
+                AuditEvent(
+                    actor_user_id=actor_user_id,
+                    action=AuditAction.POLL_CLOSE.value,
+                    entity_type="poll_instance",
+                    entity_id=instance.id or 0,
+                    details={"poll_id": poll.id},
+                    created_at=now,
+                ),
+                now=now,
+            )
+            closed = replace(instance, status=InstanceStatus.CLOSED, closed_at=now)
+        await self._broadcaster.refresh(closed.id or 0)
+        return closed
+
+    async def reopen(self, poll_id: int, *, actor_user_id: int) -> PollInstance:
+        """Reopen the latest closed instance and restore its vote keyboard."""
+        now = self._clock.now()
+        async with self._uow() as repos:
+            poll = await self._require_poll(repos, poll_id)
+            instance = await repos.instances.latest_with_status(poll_id, InstanceStatus.CLOSED)
+            if instance is None:
+                raise NotFoundError(f"poll {poll_id} has no closed instance")
+            await repos.instances.set_status(
+                instance.id or 0,
+                InstanceStatus.OPEN,
+                now=now,
+                closed_at=None,
+            )
+            await repos.audit.add(
+                AuditEvent(
+                    actor_user_id=actor_user_id,
+                    action=AuditAction.POLL_REOPEN.value,
+                    entity_type="poll_instance",
+                    entity_id=instance.id or 0,
+                    details={"poll_id": poll.id},
+                    created_at=now,
+                ),
+                now=now,
+            )
+            reopened = replace(instance, status=InstanceStatus.OPEN, closed_at=None)
+        await self._broadcaster.refresh(reopened.id or 0)
+        return reopened
+
+    async def delete(self, poll_id: int, *, actor_user_id: int) -> BroadcastResult:
+        """Soft-delete a poll, remove its responses, and redact every message."""
+        now = self._clock.now()
+        async with self._uow() as repos:
+            await self._require_poll(repos, poll_id)
+            instances = await repos.instances.list_for_poll(poll_id)
+            instance_ids = [instance.id or 0 for instance in instances]
+            await repos.polls.set_status(poll_id, PollStatus.DELETED, now=now)
+            for instance in instances:
+                await repos.instances.set_status(
+                    instance.id or 0,
+                    InstanceStatus.DELETED,
+                    now=now,
+                    closed_at=instance.closed_at,
+                )
+                await repos.messages.skip_pending_for_instance(
+                    instance.id or 0,
+                    SkipReason.POLL_DELETED.value,
+                    now=now,
+                )
+            await repos.responses.delete_for_instances(instance_ids)
+            await repos.audit.add(
+                AuditEvent(
+                    actor_user_id=actor_user_id,
+                    action=AuditAction.POLL_DELETE.value,
+                    entity_type="poll",
+                    entity_id=poll_id,
+                    details={"instance_count": len(instances)},
+                    created_at=now,
+                ),
+                now=now,
+            )
+        return await self._broadcaster.redact(instance_ids)
+
+    async def refresh(self, poll_id: int, *, actor_user_id: int) -> RefreshResult:
+        """Retry failed messages and re-render every sent message of the latest instance."""
+        now = self._clock.now()
+        async with self._uow() as repos:
+            poll = await self._require_poll(repos, poll_id)
+            instance = await repos.instances.latest_for_poll(poll_id)
+            if instance is None:
+                raise NotFoundError(f"poll {poll_id} has not been published")
+            retried = await repos.messages.reset_failed_for_instance(instance.id or 0, now=now)
+            await repos.audit.add(
+                AuditEvent(
+                    actor_user_id=actor_user_id,
+                    action=AuditAction.POLL_REFRESH.value,
+                    entity_type="poll_instance",
+                    entity_id=instance.id or 0,
+                    details={"poll_id": poll.id, "retried": retried},
+                    created_at=now,
+                ),
+                now=now,
+            )
+        broadcast = await self._broadcaster.refresh(instance.id or 0)
+        return RefreshResult(
+            instance_id=instance.id or 0,
+            retried=retried,
+            broadcast=broadcast,
+        )
+
+    async def responses(
+        self,
+        poll_id: int,
+        *,
+        option_position: int = 1,
+        page: int = 1,
+    ) -> ResponsePage:
+        """Return one page of names for the selected option of the latest instance."""
+        async with self._uow() as repos:
+            poll = await self._require_poll(repos, poll_id)
+            instance = await repos.instances.latest_for_poll(poll_id)
+            if instance is None:
+                raise NotFoundError(f"poll {poll_id} has not been published")
+            if not 1 <= option_position <= len(poll.options):
+                raise ValidationError(
+                    "option",
+                    f"option must be between 1 and {len(poll.options)}",
+                )
+            option = poll.options[option_position - 1]
+            responses = await repos.responses.list_for_instance(instance.id or 0)
+
+        names = tuple(
+            response.first_name for response in responses if response.option_id == option.id
+        )
+        total = len(names)
+        pages = max(ceil(total / RESPONSE_PAGE_SIZE), 1)
+        if page < 1 or page > pages:
+            raise ValidationError("page", f"page must be between 1 and {pages}")
+        start = (page - 1) * RESPONSE_PAGE_SIZE
+        return ResponsePage(
+            poll=poll,
+            instance=instance,
+            option=option,
+            names=names[start : start + RESPONSE_PAGE_SIZE],
+            number=page,
+            pages=pages,
+            total=total,
+        )
+
+    async def _response_count(self, repos: Repositories, poll_id: int) -> int:
+        latest = await repos.instances.latest_for_poll(poll_id)
+        if latest is None:
+            return 0
+        return await repos.responses.count_for_instance(latest.id or 0)
+
+    async def _require_poll(self, repos: Repositories, poll_id: int) -> Poll:
+        poll = await repos.polls.get(poll_id)
+        if poll is None or poll.status is PollStatus.DELETED:
+            raise NotFoundError(f"poll {poll_id} does not exist")
+        return poll

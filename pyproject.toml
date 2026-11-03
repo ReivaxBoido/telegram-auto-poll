@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "telegram-auto-poll"
-version = "0.1.0"
-description = "Telegram bot that delivers saved polls on a schedule, administered by DM."
+version = "0.3.0a0"
+description = "Telegram bot that publishes CountMeIn-style sign-up polls, administered by DM."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.12,<3.13"
 authors = [{ name = "ReivaxBoido" }]
-keywords = ["telegram", "bot", "polls", "scheduler"]
+keywords = ["telegram", "bot", "polls", "rsvp", "sign-up"]
 classifiers = [
   "Private :: Do Not Upload",
   "Programming Language :: Python :: 3.12",
@@ -99,6 +99,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
   "integration: uses a temporary SQLite database and real migrations",
+  "allow_network: permits loopback sockets for aiohttp test clients",
 ]
 filterwarnings = [
   # python-telegram-bot warns that RetryAfter.retry_after becomes a timedelta; the adapter

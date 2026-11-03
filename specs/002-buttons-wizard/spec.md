@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Spec ID | SPEC-002 |
-| Status | Clarified — G1 closed; awaiting G2 |
+| Status | Superseded by SPEC-003 |
 | Owner | @ReivaxBoido |
 | Issue | #4 |
 | Plan | [`plan.md`](plan.md) — awaiting G2 |

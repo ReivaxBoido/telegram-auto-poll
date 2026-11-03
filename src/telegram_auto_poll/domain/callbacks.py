@@ -1,7 +1,15 @@
-"""Versioned callback data (spec §8.3).
+"""Versioned callback data shared by the bot and the posting worker (SPEC-003 FR-317).
 
 Envelope: ``v1:<namespace>:<action>[:<argument>]``, at most 64 bytes. Telegram truncates longer
 payloads silently, so encoding refuses them instead of producing an unclickable button.
+
+Namespaces:
+
+* ``v`` — participant vote (instance and option identifiers)
+* ``p`` — admin poll action (publish, close, reopen, refresh, delete, responses)
+* ``t`` — admin publish target selection
+* ``w`` — admin wizard
+* ``c`` — admin confirmation
 """
 
 from __future__ import annotations
@@ -12,11 +20,15 @@ from dataclasses import dataclass
 CALLBACK_VERSION = "v1"
 MAX_CALLBACK_BYTES = 64
 
+NAMESPACE_VOTE = "v"
 NAMESPACE_POLL = "p"
-NAMESPACE_SCHEDULE = "s"
+NAMESPACE_TARGET = "t"
 NAMESPACE_WIZARD = "w"
+NAMESPACE_CONFIRM = "c"
 
-NAMESPACES = frozenset({NAMESPACE_POLL, NAMESPACE_SCHEDULE, NAMESPACE_WIZARD})
+NAMESPACES = frozenset(
+    {NAMESPACE_VOTE, NAMESPACE_POLL, NAMESPACE_TARGET, NAMESPACE_WIZARD, NAMESPACE_CONFIRM}
+)
 
 _ACTION = re.compile(r"^[a-z][a-z0-9_]{0,30}$")
 _ARGUMENT = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
@@ -79,32 +91,41 @@ def decode(data: str) -> Callback:
     return Callback(namespace=namespace, action=action, argument=argument)
 
 
-def poll_action(action: str, poll_id: int | None = None) -> str:
-    """Encode a poll-namespace callback."""
+def vote(instance_id: int, option_id: int) -> str:
+    """Callback data for toggling one option of one instance."""
+    return encode(NAMESPACE_VOTE, "toggle", f"{instance_id}_{option_id}")
+
+
+def poll_action(action: str, poll_id: int) -> str:
+    """Callback data for an admin poll action."""
     return encode(NAMESPACE_POLL, action, poll_id)
 
 
-def schedule_action(action: str, schedule_id: int | None = None) -> str:
-    """Encode a schedule-namespace callback."""
-    return encode(NAMESPACE_SCHEDULE, action, schedule_id)
+def target_toggle(poll_id: int, chat_id: int) -> str:
+    """Callback data for toggling one target chat during publish."""
+    return encode(NAMESPACE_TARGET, "toggle", f"{poll_id}_{chat_id}")
 
 
-WIZARD_BACK = "back"
-WIZARD_CANCEL = "cancel"
-WIZARD_NEXT = "next"
-WIZARD_DONE = "done"
-WIZARD_SKIP = "skip"
-WIZARD_ANONYMITY = "anon"
-WIZARD_MULTIPLE = "multi"
-WIZARD_TARGET = "tgt"
-WIZARD_TARGET_PAGE = "tgtp"
-WIZARD_KIND = "kind"
-WIZARD_WEEKDAY = "wd"
-WIZARD_OPTION_REMOVE = "opt"
-WIZARD_ADD_OPTION = "add"
-WIZARD_CONFIRM = "create"
+def target_page(poll_id: int, page: int) -> str:
+    """Callback data for paging the publish target list."""
+    return encode(NAMESPACE_TARGET, "page", f"{poll_id}_{page}")
+
+
+def target_done(poll_id: int) -> str:
+    """Callback data for confirming the publish target selection."""
+    return encode(NAMESPACE_TARGET, "done", poll_id)
+
+
+def target_cancel(poll_id: int) -> str:
+    """Callback data for cancelling the publish target selection."""
+    return encode(NAMESPACE_TARGET, "cancel", poll_id)
 
 
 def wizard_action(action: str, argument: str | int | None = None) -> str:
-    """Encode a wizard-namespace callback."""
+    """Callback data for a wizard step."""
     return encode(NAMESPACE_WIZARD, action, argument)
+
+
+def confirm(action: str, entity_id: int) -> str:
+    """Callback data for a destructive confirmation."""
+    return encode(NAMESPACE_CONFIRM, action, entity_id)

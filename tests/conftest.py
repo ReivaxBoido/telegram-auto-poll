@@ -1,8 +1,7 @@
 """Shared fixtures and global test guards.
 
-Unit and integration tests use the same temporary SQLite file and the real migrations
-(constitution §11.5); there is no in-memory database shortcut, so foreign keys and WAL behave
-exactly as they do in production.
+Unit and integration tests use the same temporary SQLite file and the real migrations; there is no
+in-memory database shortcut, so foreign keys and WAL behave exactly as they do in production.
 """
 
 from __future__ import annotations
@@ -19,29 +18,20 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from telegram_auto_poll.db.engine import create_engine, create_session_factory, session_scope
 from telegram_auto_poll.db.migrate import upgrade_database
 from telegram_auto_poll.db.repositories.chats import ChatRepository
+from telegram_auto_poll.db.repositories.poll_instances import PollInstanceRepository
+from telegram_auto_poll.db.repositories.poll_messages import PollMessageRepository
 from telegram_auto_poll.db.repositories.polls import PollRepository
-from telegram_auto_poll.db.repositories.schedules import ScheduleRepository
-from telegram_auto_poll.domain.entities import Chat, Poll, Schedule
-from tests.factories import FIXED_NOW, make_chat, make_poll, make_schedule
-
-# ---------------------------------------------------------------------------------------------
-# NFR-105: unit and integration tests must never touch the network. Any accidental socket use
-# fails loudly instead of hanging or reaching Telegram.
-# ---------------------------------------------------------------------------------------------
+from telegram_auto_poll.domain.entities import Chat, Poll, PollInstance, PollMessage
+from tests.factories import FIXED_NOW, make_chat, make_instance, make_poll
 
 
 def _blocked(*args: object, **kwargs: object) -> None:
-    raise RuntimeError("network access is blocked in tests (NFR-105)")
+    raise RuntimeError("network access is blocked in tests (NFR-304)")
 
 
 @pytest.fixture(autouse=True)
 def _block_network(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
-    """Block outbound I/O while leaving AF_UNIX loop internals alone.
-
-    Patching the constructor outright breaks asyncio's self-pipe, so the guard is attached to
-    ``connect``/``connect_ex``/``create_connection``/``getaddrinfo`` instead: any attempt to reach a
-    remote endpoint fails loudly, which is what NFR-105 needs.
-    """
+    """Block outbound I/O while leaving AF_UNIX loop internals alone."""
     if request.node.get_closest_marker("allow_network") is not None:
         return
     monkeypatch.setattr(socket.socket, "connect", _blocked)
@@ -61,11 +51,10 @@ def data_dir(tmp_path: Path) -> Path:
 ADMIN_USER_ID = 100_000_001
 FAKE_BOT_TOKEN = "123456789:TEST-TOKEN-DO-NOT-USE-abcdefghijklmnop"
 
-# Every variable the application reads. Tests start from a clean slate so a developer's shell
-# cannot influence a result.
 CONFIG_ENV_VARS = (
     "ADMIN_COMMANDS_PER_MINUTE",
     "ADMIN_USER_IDS",
+    "ALLOW_DESTRUCTIVE_MIGRATION",
     "BOT_POLL_TIMEOUT_SECONDS",
     "BUILD_SHA",
     "BUILD_VERSION",
@@ -79,8 +68,14 @@ CONFIG_ENV_VARS = (
     "HEALTH_PORT",
     "LOG_FORMAT",
     "LOG_LEVEL",
+    "MESSAGE_EDIT_CONCURRENCY",
+    "MESSAGE_EDIT_RETRY_ATTEMPTS",
     "METRICS_ENABLED",
     "MIGRATE_ON_STARTUP",
+    "POSTING_TICK_SECONDS",
+    "RESPONSE_NAMES_PER_OPTION",
+    "RESPONSE_RETENTION_DAYS",
+    "RESPONSE_UPDATE_DEBOUNCE_SECONDS",
     "RETENTION_DAYS",
     "SCHEDULER_TICK_SECONDS",
     "SEND_CONCURRENCY",
@@ -89,6 +84,7 @@ CONFIG_ENV_VARS = (
     "SEND_RETRY_BASE_SECONDS",
     "SHUTDOWN_GRACE_SECONDS",
     "TELEGRAM_BOT_TOKEN",
+    "VOTES_PER_MINUTE",
     "WIZARD_TTL_SECONDS",
 )
 
@@ -101,11 +97,12 @@ def _clean_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @dataclass(frozen=True)
 class Seed:
-    """Identifiers of one chat, one poll, and one schedule that reference each other."""
+    """Identifiers of one chat, poll, instance, and message that reference each other."""
 
     chat: Chat
     poll: Poll
-    schedule: Schedule
+    instance: PollInstance
+    message: PollMessage
 
     @property
     def chat_id(self) -> int:
@@ -118,9 +115,14 @@ class Seed:
         return self.poll.id
 
     @property
-    def schedule_id(self) -> int:
-        assert self.schedule.id is not None
-        return self.schedule.id
+    def instance_id(self) -> int:
+        assert self.instance.id is not None
+        return self.instance.id
+
+    @property
+    def message_id(self) -> int:
+        assert self.message.id is not None
+        return self.message.id
 
 
 @pytest.fixture
@@ -147,11 +149,19 @@ async def factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
 
 @pytest_asyncio.fixture
 async def seed(factory: async_sessionmaker[AsyncSession]) -> Seed:
-    """Create the chat/poll/schedule triple most persistence and service tests need."""
+    """Create the chat/poll/instance/message quadruple most persistence tests need."""
     async with session_scope(factory) as session:
         chat = await ChatRepository(session).upsert(make_chat(), now=FIXED_NOW)
-        poll = await PollRepository(session).add(make_poll(targets=(chat.id,)), now=FIXED_NOW)
-        schedule = await ScheduleRepository(session).add(
-            make_schedule(poll_id=poll.id), now=FIXED_NOW
+        poll = await PollRepository(session).add(make_poll(), now=FIXED_NOW)
+        instance = await PollInstanceRepository(session).add(
+            make_instance(poll_id=poll.id), now=FIXED_NOW
         )
-    return Seed(chat=chat, poll=poll, schedule=schedule)
+        messages = await PollMessageRepository(session).add_many(
+            instance.id or 0, [chat.id or 0], now=FIXED_NOW
+        )
+    async with session_scope(factory) as session:
+        repo = PollMessageRepository(session)
+        await repo.mark_sent(messages[0].id or 0, 500, now=FIXED_NOW)
+        message = await repo.get(messages[0].id or 0)
+    assert message is not None
+    return Seed(chat=chat, poll=poll, instance=instance, message=message)

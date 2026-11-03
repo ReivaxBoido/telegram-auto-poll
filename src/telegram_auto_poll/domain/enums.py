@@ -9,30 +9,48 @@ from __future__ import annotations
 from enum import StrEnum
 
 
-class ScheduleKind(StrEnum):
-    """Recurrence rule of a schedule."""
+class PollStatus(StrEnum):
+    """Lifecycle of a sign-up poll definition."""
 
-    DAILY = "daily"
-    WEEKLY = "weekly"
-    MONTHLY = "monthly"
-    ONCE = "once"
+    DRAFT = "draft"
+    ACTIVE = "active"
+    DELETED = "deleted"
 
 
-class DeliveryStatus(StrEnum):
-    """Lifecycle of a single poll/chat/occurrence delivery."""
+class InstanceStatus(StrEnum):
+    """Lifecycle of one publication/occurrence of a poll."""
+
+    OPEN = "open"
+    CLOSED = "closed"
+    DELETED = "deleted"
+
+
+class InstanceTrigger(StrEnum):
+    """Why an instance exists."""
+
+    MANUAL = "manual"
+    SCHEDULED = "scheduled"
+
+
+class MessageStatus(StrEnum):
+    """Delivery state of one bot message for one instance/chat."""
 
     PENDING = "pending"
     SENDING = "sending"
     SENT = "sent"
     FAILED = "failed"
+    MISSING = "missing"
     SKIPPED = "skipped"
 
 
-class Trigger(StrEnum):
-    """Why a delivery row exists."""
+class SkipReason(StrEnum):
+    """Why a message was skipped rather than sent."""
 
-    SCHEDULED = "scheduled"
-    MANUAL = "manual"
+    CHAT_INACTIVE = "chat_inactive"
+    INSTANCE_CLOSED = "instance_closed"
+    INSTANCE_DELETED = "instance_deleted"
+    POLL_DELETED = "poll_deleted"
+    POLL_MISSING = "poll_missing"
 
 
 class ChatType(StrEnum):
@@ -43,13 +61,11 @@ class ChatType(StrEnum):
     CHANNEL = "channel"
 
 
-class SkipReason(StrEnum):
-    """Why a delivery was skipped rather than sent."""
+class VoteAction(StrEnum):
+    """Outcome of a participant's option toggle."""
 
-    MISSED_GRACE_WINDOW = "missed_grace_window"
-    CHAT_INACTIVE = "chat_inactive"
-    POLL_ARCHIVED = "poll_archived"
-    POLL_MISSING = "poll_missing"
+    ADDED = "added"
+    REMOVED = "removed"
 
 
 class AuditAction(StrEnum):
@@ -58,8 +74,8 @@ class AuditAction(StrEnum):
     CHAT_REGISTER = "chat.register"
     CHAT_DEACTIVATE = "chat.deactivate"
     POLL_CREATE = "poll.create"
-    SCHEDULE_CREATE = "schedule.create"
-    SCHEDULE_PAUSE = "schedule.pause"
-    SCHEDULE_RESUME = "schedule.resume"
-    SCHEDULE_DELETE = "schedule.delete"
-    DELIVERY_SEND = "delivery.send"
+    POLL_PUBLISH = "poll.publish"
+    POLL_CLOSE = "poll.close"
+    POLL_REOPEN = "poll.reopen"
+    POLL_DELETE = "poll.delete"
+    POLL_REFRESH = "poll.refresh"

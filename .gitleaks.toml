@@ -1,0 +1,14 @@
+title = "telegram-auto-poll gitleaks configuration"
+
+[allowlist]
+description = "Local env files, virtualenvs, caches, and data are not repository content."
+paths = [
+  '''^\.env$''',
+  '''^\.venv/''',
+  '''^\.git/''',
+  '''^\.pytest_cache/''',
+  '''^\.mypy_cache/''',
+  '''^\.ruff_cache/''',
+  '''^data/''',
+  '''^backups/''',
+]

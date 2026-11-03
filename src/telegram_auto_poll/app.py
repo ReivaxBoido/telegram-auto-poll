@@ -1,8 +1,8 @@
-"""Process guards and the supervised runtime (T-037, FR-103, FR-126, NFR-102).
+"""Process guards and the supervised runtime (SPEC-003 §13).
 
-The single-instance lock and the component supervisor live here. Startup and shutdown are ordered:
-health, polling, scheduler, then the delivery worker; shutdown reverses that order and bounds the
-worker drain with ``SHUTDOWN_GRACE_SECONDS``.
+The single-instance lock and the component supervisor live here. Startup order is health, polling,
+retention cron, then the posting worker and response broadcaster. Shutdown reverses that order and
+bounds the drain with ``SHUTDOWN_GRACE_SECONDS``.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
-from typing import Protocol, cast
+from typing import Protocol
 
 from aiohttp import web
 from sqlalchemy import text
@@ -28,8 +28,8 @@ from telegram.ext import Application
 from .bot.application import BotResponder, build_application
 from .bot.auth import AdminGuard
 from .bot.handlers.commands import HandlerContext
-from .bot.telegram_gateway import TelegramChatGateway
-from .bot.telegram_sender import TelegramPollSender
+from .bot.publish_store import PublishStore
+from .bot.telegram_gateway import TelegramChatGateway, TelegramMessageGateway
 from .bot.wizards.store import WizardStore
 from .clock import AsyncioSleeper, SystemClock
 from .config import ConfigurationError, Settings, get_settings
@@ -37,6 +37,7 @@ from .db.engine import check_database, create_engine, create_session_factory
 from .db.migrate import migrate_on_startup
 from .db.uow import unit_of_work
 from .domain.ports import Clock
+from .logging_setup import configure_logging
 from .observability.health import HealthService, create_health_app
 from .observability.metrics import Metrics
 from .scheduler.engine import (
@@ -44,18 +45,19 @@ from .scheduler.engine import (
     RETENTION_JOB_ID,
     RETENTION_MINUTE_UTC,
     ApschedulerBackend,
-    SchedulerEngine,
     SchedulerHeartbeat,
 )
-from .scheduler.planner import PlannedSchedule, ScheduleJobPlanner
-from .scheduler.worker import DeliveryWorker
+from .services.broadcaster import ResponseBroadcaster
 from .services.chat_service import ChatService
-from .services.delivery_service import DeliveryService
+from .services.pagination import PAGE_SIZE
 from .services.poll_service import PollService
+from .services.posting_worker import PostingWorker
+from .services.publish_service import PublishService
 from .services.rate_limiter import RateLimiter
 from .services.recovery_service import RecoveryService
+from .services.response_service import ResponseService
 from .services.retention_service import RetentionService
-from .services.schedule_service import ScheduleService
+from .services.status_service import StatusService
 
 logger = logging.getLogger(__name__)
 
@@ -177,14 +179,15 @@ class AiohttpHealthRunner:
 class Runtime:
     """Owns the background components and their ordered lifecycle."""
 
-    scheduler: object
-    worker: object
+    scheduler: ApschedulerBackend
+    worker: PostingWorker
+    broadcaster: ResponseBroadcaster
     polling: PollingRunner
     health: HealthRunner
     shutdown_grace_seconds: float = 30.0
     on_start: Callable[[], Awaitable[None]] | None = None
     on_stop: Callable[[], Awaitable[None]] | None = None
-    _worker_task: asyncio.Task[None] | None = field(default=None, init=False)
+    _tasks: list[asyncio.Task[None]] = field(default_factory=list, init=False)
 
     async def run(self, stop: asyncio.Event) -> None:
         """Start everything, wait for ``stop``, then shut down in reverse order."""
@@ -192,10 +195,13 @@ class Runtime:
             await self.on_start()
         await self.health.start()
         await self.polling.start()
-        await self.scheduler.start()  # type: ignore[attr-defined]
+        self.scheduler.start()
         logger.info("startup_complete")
 
-        self._worker_task = asyncio.create_task(self.worker.run(stop))  # type: ignore[attr-defined]
+        self._tasks = [
+            asyncio.create_task(self.worker.run(stop)),
+            asyncio.create_task(self.broadcaster.run(stop)),
+        ]
         try:
             await stop.wait()
         finally:
@@ -205,13 +211,16 @@ class Runtime:
         """Stop accepting work, drain within the grace period, then release resources."""
         logger.info("shutdown_started")
         await self.polling.stop()
-        await self.scheduler.shutdown()  # type: ignore[attr-defined]
-        task = cast("asyncio.Task[None]", self._worker_task)
-        try:
-            await asyncio.wait_for(task, timeout=self.shutdown_grace_seconds)
-        except TimeoutError:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        self.scheduler.shutdown()
+        if self._tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*self._tasks), timeout=self.shutdown_grace_seconds
+                )
+            except TimeoutError:
+                for task in self._tasks:
+                    task.cancel()
+                await asyncio.gather(*self._tasks, return_exceptions=True)
         await self.health.stop()
         if self.on_stop is not None:
             await self.on_stop()
@@ -225,7 +234,7 @@ def _install_signal_handlers(loop: asyncio.AbstractEventLoop, stop: asyncio.Even
 
 
 class _BotNotifier:
-    """Admin alerts through the Bot API; delivery failures already carry sanitized text."""
+    """Admin alerts through the Bot API; failures already carry sanitized text."""
 
     def __init__(self, bot: Bot, admin_user_ids: frozenset[int]) -> None:
         self._bot = bot
@@ -248,15 +257,6 @@ def _database_path(settings: Settings) -> Path:
     return Path(settings.database_url.removeprefix("sqlite+aiosqlite:///"))
 
 
-def _load_runs(uow: object) -> Callable[[], Awaitable[list[PlannedSchedule]]]:
-    async def load() -> list[PlannedSchedule]:
-        async with uow() as repos:  # type: ignore[operator]
-            runs = await repos.schedules.active_runs()
-        return [PlannedSchedule(schedule_id=sid, next_run_at=when) for sid, when in runs]
-
-    return load
-
-
 def build_runtime(
     settings: Settings,
     *,
@@ -272,37 +272,89 @@ def build_runtime(
 
     bot = Bot(settings.telegram_bot_token.get_secret_value())
     notifier = _BotNotifier(bot, settings.admin_user_ids)
-    delivery = DeliveryService(
+    gateway = TelegramMessageGateway(bot)
+    chat_gateway = TelegramChatGateway(bot)
+    metrics = Metrics(version=settings.build_version, sha=settings.build_sha)
+    heartbeat = SchedulerHeartbeat()
+    sleeper = AsyncioSleeper()
+
+    def on_tick() -> None:
+        heartbeat.beat()
+        metrics.observe_heartbeat(heartbeat.age())
+
+    broadcaster = ResponseBroadcaster(
         uow=uow,
-        sender=TelegramPollSender(bot),
-        notifier=notifier,
-        pacer=RateLimiter(clock=resolved_clock, sleeper=AsyncioSleeper()),
+        gateway=gateway,
         clock=resolved_clock,
-        grace_seconds=settings.send_grace_seconds,
-        max_attempts=settings.send_retry_attempts,
+        sleeper=sleeper,
+        names_per_option=settings.response_names_per_option,
+        debounce_seconds=settings.response_update_debounce_seconds,
+        concurrency=settings.message_edit_concurrency,
+        max_attempts=settings.message_edit_retry_attempts,
         retry_base_seconds=settings.send_retry_base_seconds,
     )
-    heartbeat = SchedulerHeartbeat()
-    metrics = Metrics(version=settings.build_version, sha=settings.build_sha)
-    holder: dict[str, SchedulerEngine] = {}
-
-    def on_tick() -> Awaitable[object]:
-        return holder["scheduler"].tick()
-
-    backend = ApschedulerBackend(tick_seconds=settings.scheduler_tick_seconds, on_tick=on_tick)
-    scheduler = SchedulerEngine(
-        planner=ScheduleJobPlanner(scheduler=backend, load=_load_runs(uow)),
-        backend=backend,
-        heartbeat=heartbeat,
-        plan=delivery.plan_due,
+    posting = PostingWorker(
+        uow=uow,
+        gateway=gateway,
+        pacer=RateLimiter(clock=resolved_clock, sleeper=sleeper),
+        notifier=notifier,
+        clock=resolved_clock,
+        sleeper=sleeper.sleep,
+        names_per_option=settings.response_names_per_option,
+        max_attempts=settings.send_retry_attempts,
+        retry_base_seconds=settings.send_retry_base_seconds,
+        concurrency=settings.send_concurrency,
+        tick_seconds=settings.posting_tick_seconds,
+        observer=metrics,
+        on_tick=on_tick,
     )
-    holder["scheduler"] = scheduler
-    worker = DeliveryWorker(service=delivery, concurrency=settings.send_concurrency)
+    polls = PollService(uow=uow, clock=resolved_clock, broadcaster=broadcaster)
+    publish = PublishService(uow=uow, clock=resolved_clock, wake=posting.wake)
+    responses = ResponseService(uow=uow, clock=resolved_clock, broadcaster=broadcaster)
+    status = StatusService(uow=uow)
+    chats = ChatService(
+        uow=uow,
+        gateway=chat_gateway,
+        clock=resolved_clock,
+        bot_user_id=int(settings.telegram_bot_token.get_secret_value().split(":", 1)[0]),
+        page_size=PAGE_SIZE,
+    )
+
+    if polling is None:
+        context = HandlerContext(
+            guard=AdminGuard(
+                admin_user_ids=settings.admin_user_ids,
+                clock=resolved_clock,
+                commands_per_minute=settings.admin_commands_per_minute,
+                votes_per_minute=settings.votes_per_minute,
+            ),
+            chats=chats,
+            polls=polls,
+            publish=publish,
+            responses=responses,
+            status=status,
+            uow=uow,
+            wizards=WizardStore(clock=resolved_clock, ttl_seconds=settings.wizard_ttl_seconds),
+            publish_sessions=PublishStore(
+                clock=resolved_clock, ttl_seconds=settings.wizard_ttl_seconds
+            ),
+            clock=resolved_clock,
+            responder=BotResponder(bot),
+            posting=posting,
+            version=settings.build_version,
+            build_sha=settings.build_sha,
+            started_at=resolved_clock.now(),
+            heartbeat_age=heartbeat.age,
+            db_check=lambda: check_database(factory),
+        )
+        polling = PtbPollingRunner(
+            build_application(token=settings.telegram_bot_token.get_secret_value(), ctx=context)
+        )
 
     health_service = HealthService(
         database=lambda: check_database(factory),
         heartbeat=heartbeat,
-        tick_seconds=settings.scheduler_tick_seconds,
+        tick_seconds=settings.posting_tick_seconds,
     )
     if health is None:
         health = AiohttpHealthRunner(
@@ -311,53 +363,31 @@ def build_runtime(
             port=settings.health_port,
         )
 
-    if polling is None:
-        context = HandlerContext(
-            guard=AdminGuard(
-                admin_user_ids=settings.admin_user_ids,
-                clock=resolved_clock,
-                commands_per_minute=settings.admin_commands_per_minute,
-            ),
-            chats=ChatService(
-                uow=uow,
-                gateway=TelegramChatGateway(bot),
-                clock=resolved_clock,
-                bot_user_id=int(settings.telegram_bot_token.get_secret_value().split(":", 1)[0]),
-            ),
-            polls=PollService(uow=uow, clock=resolved_clock),
-            schedules=ScheduleService(uow=uow, clock=resolved_clock),
-            deliveries=delivery,
-            uow=uow,
-            wizards=WizardStore(clock=resolved_clock, ttl_seconds=settings.wizard_ttl_seconds),
-            clock=resolved_clock,
-            responder=BotResponder(bot),
-            version=settings.build_version,
-            build_sha=settings.build_sha,
-            started_at=resolved_clock.now(),
-            default_timezone=settings.default_timezone,
-            heartbeat_age=heartbeat.age,
-        )
-        polling = PtbPollingRunner(
-            build_application(token=settings.telegram_bot_token.get_secret_value(), ctx=context)
-        )
-
     retention = RetentionService(
         uow=uow,
         clock=resolved_clock,
         checkpoint=lambda: _checkpoint_wal(engine),
+        redact=broadcaster.redact,
+        response_retention_days=settings.response_retention_days,
         retention_days=settings.retention_days,
     )
+    scheduler = ApschedulerBackend()
 
     async def run_retention() -> None:
         result = await retention.run()
-        metrics.retention_deleted.labels(table="deliveries").inc(result.deliveries)
+        metrics.retention_deleted.labels(table="poll_responses").inc(result.responses)
+        metrics.retention_deleted.labels(table="poll_messages").inc(result.messages)
         metrics.retention_deleted.labels(table="audit_events").inc(result.audit_events)
         logger.info(
             "retention_completed",
-            extra={"deliveries": result.deliveries, "audit_events": result.audit_events},
+            extra={
+                "responses": result.responses,
+                "messages": result.messages,
+                "audit_events": result.audit_events,
+            },
         )
 
-    backend.add_cron(
+    scheduler.add_cron(
         RETENTION_JOB_ID,
         hour=RETENTION_HOUR_UTC,
         minute=RETENTION_MINUTE_UTC,
@@ -368,7 +398,6 @@ def build_runtime(
         uow=uow,
         clock=resolved_clock,
         notifier=notifier,
-        plan=delivery.plan_due,
     )
 
     async def on_start() -> None:
@@ -377,13 +406,15 @@ def build_runtime(
             db_path=_database_path(settings),
             backup_dir=settings.data_dir / "backups",
             now=resolved_clock.now(),
+            allow_destructive=settings.allow_destructive_migration,
         )
         await recovery.run()
         metrics.mark_started(resolved_clock.now().timestamp())
 
     return Runtime(
         scheduler=scheduler,
-        worker=worker,
+        worker=posting,
+        broadcaster=broadcaster,
         polling=polling,
         health=health,
         shutdown_grace_seconds=settings.shutdown_grace_seconds,
@@ -399,6 +430,13 @@ def main(settings: Settings | None = None) -> int:
     except ConfigurationError as exc:
         print(f"telegram-auto-poll: {exc}", file=sys.stderr)
         return EXIT_FAILURE
+
+    configure_logging(
+        level=resolved.log_level,
+        log_format=resolved.log_format,
+        environment=resolved.environment,
+        version=resolved.build_version,
+    )
 
     lock = SingleInstanceLock(resolved.data_dir)
     try:

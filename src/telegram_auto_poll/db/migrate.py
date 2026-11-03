@@ -7,6 +7,7 @@ non-zero without touching the schema.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -77,8 +78,10 @@ async def migrate_on_startup(
     db_path: Path,
     backup_dir: Path,
     now: datetime,
+    allow_destructive: bool = False,
 ) -> MigrationResult:
     """Back up, migrate, and prune. Callers log the result and abort on any exception."""
+    os.environ["ALLOW_DESTRUCTIVE_MIGRATION"] = "true" if allow_destructive else "false"
     backup = backup_database(db_path=db_path, backup_dir=backup_dir, now=now)
     await upgrade_database(engine)
     return MigrationResult(backup=backup, pruned=prune_backups(backup_dir))

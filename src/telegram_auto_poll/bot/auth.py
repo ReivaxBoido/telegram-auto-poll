@@ -1,12 +1,11 @@
-"""Admin authorization, callback validation, and the per-admin command budget (FR-106 - FR-108).
+"""Admin and participant authorization (SPEC-003 FR-318, FR-319, ADR-0004).
 
-Identity is decided from the update alone, never from wizard state. The checks are split so a handler
-can answer a refusal precisely:
+Two paths are deliberately separate:
 
-1. ``authorize_message`` / ``authorize_callback`` — private chat, allowlist, callback namespace.
-2. ``consume_command`` — the per-admin token bucket (plus a separate ``/sendnow`` bucket).
+1. Admin commands and admin callbacks: private chat + ``ADMIN_USER_IDS``.
+2. Participant votes: any callback actor, validated later against the stored message/instance/option.
 
-Nothing here mutates or persists anything, so a refusal cannot leave a trace.
+Callback data is never identity. A forged vote can only change the sender's own response.
 """
 
 from __future__ import annotations
@@ -20,16 +19,18 @@ from enum import StrEnum
 from telegram import Update
 from telegram.ext import filters
 
+from ..domain.callbacks import CallbackDataError, decode
 from ..domain.ports import Clock
 
 CALLBACK_VERSION = "v1"
-
-#: Callback namespaces the codec may produce: poll, schedule, wizard (spec §8.3).
-CALLBACK_NAMESPACES = frozenset({"p", "s", "w"})
+ADMIN_NAMESPACES = frozenset({"p", "t", "w", "c"})
+VOTE_NAMESPACE = "v"
+CALLBACK_NAMESPACES = ADMIN_NAMESPACES | {VOTE_NAMESPACE}
 
 COMMAND_WINDOW_SECONDS = 60.0
 SENDNOW_COMMAND = "sendnow"
 SENDNOW_PER_MINUTE = 5
+DEFAULT_VOTES_PER_MINUTE = 30
 
 GENERIC_REFUSAL = "This is a private bot. Access is restricted to its administrators."
 
@@ -72,8 +73,24 @@ def rate_limit_message(retry_after: int) -> str:
     return f"Too many commands. Try again in {retry_after} s."
 
 
+def vote_rate_limit_message(retry_after: int) -> str:
+    """Render the refusal shown when the vote budget is exhausted."""
+    return f"Too many votes. Try again in {retry_after} s."
+
+
+def _decoded_namespace(update: object) -> str | None:
+    query = getattr(update, "callback_query", None)
+    data = getattr(query, "data", None)
+    if not isinstance(data, str):
+        return None
+    try:
+        return decode(data).namespace
+    except CallbackDataError:
+        return None
+
+
 class AdminGuard:
-    """Checks identity and enforces the per-admin command budgets."""
+    """Checks identity and enforces the per-admin and per-user vote budgets."""
 
     def __init__(
         self,
@@ -82,13 +99,13 @@ class AdminGuard:
         clock: Clock,
         commands_per_minute: int = 20,
         sendnow_per_minute: int = SENDNOW_PER_MINUTE,
-        namespaces: frozenset[str] = CALLBACK_NAMESPACES,
+        votes_per_minute: int = DEFAULT_VOTES_PER_MINUTE,
     ) -> None:
         self._admins = admin_user_ids
         self._clock = clock
         self._commands_per_minute = commands_per_minute
         self._sendnow_per_minute = sendnow_per_minute
-        self._namespaces = namespaces
+        self._votes_per_minute = votes_per_minute
         self._usage: dict[tuple[int, str], deque[datetime]] = {}
 
     # ----------------------------------------------------------------------------------------
@@ -108,18 +125,32 @@ class AdminGuard:
             return Decision(allowed=False, reason=AuthDenial.NOT_ADMIN)
         return ALLOWED
 
-    def authorize_callback(self, update: object) -> Decision:
-        """Re-authorize the callback actor and validate the data envelope."""
+    def authorize_admin_callback(self, update: object) -> Decision:
+        """Accept an admin callback only from a private chat and an allowlisted actor."""
         query = getattr(update, "callback_query", None)
         if query is None:
             return Decision(allowed=False, reason=AuthDenial.BAD_CALLBACK)
         user_id = getattr(getattr(query, "from_user", None), "id", None)
         if user_id is None or user_id not in self._admins:
             return Decision(allowed=False, reason=AuthDenial.NOT_ADMIN)
+        message = getattr(query, "message", None)
+        chat = getattr(message, "chat", None)
+        if str(getattr(chat, "type", "")).lower() != "private":
+            return Decision(allowed=False, reason=AuthDenial.NOT_PRIVATE)
+        namespace = _decoded_namespace(update)
+        if namespace not in ADMIN_NAMESPACES:
+            return Decision(allowed=False, reason=AuthDenial.BAD_CALLBACK)
+        return ALLOWED
 
-        data = getattr(query, "data", None)
-        parts = data.split(":") if isinstance(data, str) else []
-        if len(parts) < 3 or parts[0] != CALLBACK_VERSION or parts[1] not in self._namespaces:
+    def authorize_vote_callback(self, update: object) -> Decision:
+        """Accept a vote callback from any actor; the response service validates the message."""
+        query = getattr(update, "callback_query", None)
+        if query is None:
+            return Decision(allowed=False, reason=AuthDenial.BAD_CALLBACK)
+        user_id = getattr(getattr(query, "from_user", None), "id", None)
+        if user_id is None:
+            return Decision(allowed=False, reason=AuthDenial.BAD_CALLBACK)
+        if _decoded_namespace(update) != VOTE_NAMESPACE:
             return Decision(allowed=False, reason=AuthDenial.BAD_CALLBACK)
         return ALLOWED
 
@@ -148,6 +179,19 @@ class AdminGuard:
             self._record(user_id, "sendnow", now)
         return ALLOWED
 
+    def consume_vote(self, user_id: int) -> Decision:
+        """Charge one vote to ``user_id``, or refuse with the seconds still to wait."""
+        now = self._clock.now()
+        wait = self._wait(user_id, "votes", self._votes_per_minute, now)
+        if wait > 0:
+            return Decision(
+                allowed=False,
+                reason=AuthDenial.RATE_LIMITED,
+                retry_after=max(math.ceil(wait), 1),
+            )
+        self._record(user_id, "votes", now)
+        return ALLOWED
+
     def _wait(self, user_id: int, bucket: str, limit: int, now: datetime) -> float:
         stamps = self._usage.get((user_id, bucket))
         if not stamps:
@@ -165,11 +209,7 @@ class AdminGuard:
 
 
 class AdminFilter(filters.BaseFilter):
-    """PTB filter: pass only private-chat messages from allowlisted users.
-
-    Rate limiting stays in the handler, so a refused command can be answered with its retry-after
-    instead of being silently dropped.
-    """
+    """PTB filter: pass only private-chat messages from allowlisted users."""
 
     def __init__(self, guard: AdminGuard) -> None:
         super().__init__()

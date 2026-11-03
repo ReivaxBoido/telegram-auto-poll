@@ -1,267 +1,202 @@
-"""Poll service behaviour (FR-116, FR-119, I-12)."""
+"""Poll lifecycle services (SPEC-003 FR-306 - FR-316)."""
 
 from __future__ import annotations
 
-from datetime import date, time, timedelta
+from dataclasses import dataclass, field
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from telegram_auto_poll.db.engine import session_scope
+from telegram_auto_poll.db.repositories.poll_messages import PollMessageRepository
+from telegram_auto_poll.db.repositories.poll_responses import PollResponseRepository
 from telegram_auto_poll.db.uow import unit_of_work
-from telegram_auto_poll.domain.enums import AuditAction, ScheduleKind
+from telegram_auto_poll.domain.entities import BroadcastResult
+from telegram_auto_poll.domain.enums import InstanceStatus, PollStatus
 from telegram_auto_poll.domain.errors import NotFoundError, ValidationError
-from telegram_auto_poll.services.poll_service import PollService, ScheduleDraft
-from tests.conftest import ADMIN_USER_ID, Seed
-from tests.factories import FIXED_NOW, make_chat, make_poll
+from telegram_auto_poll.services.poll_service import PollService
+from tests.conftest import Seed
+from tests.factories import FIXED_NOW
 from tests.fakes import FakeClock
 
-OPTIONS = ("Reliability", "Speed", "Docs")
+
+@dataclass
+class FakeBroadcaster:
+    """Records render/redact calls without touching Telegram."""
+
+    refreshed: list[int] = field(default_factory=list)
+    redacted: list[int] = field(default_factory=list)
+    dirty: list[int] = field(default_factory=list)
+
+    def mark_dirty(self, instance_id: int) -> None:
+        self.dirty.append(instance_id)
+
+    async def refresh(self, instance_id: int) -> BroadcastResult:
+        self.refreshed.append(instance_id)
+        return BroadcastResult(edited=1)
+
+    async def redact(self, instance_ids: list[int]) -> BroadcastResult:
+        self.redacted.extend(instance_ids)
+        return BroadcastResult(edited=len(instance_ids))
 
 
-def build(
-    factory: async_sessionmaker[AsyncSession], clock: FakeClock | None = None
-) -> tuple[PollService, FakeClock]:
-    resolved = clock or FakeClock(FIXED_NOW)
-    return PollService(uow=lambda: unit_of_work(factory), clock=resolved), resolved
+@pytest.fixture
+def broadcaster() -> FakeBroadcaster:
+    return FakeBroadcaster()
 
 
-async def test_create_persists_poll_targets_and_schedule_in_one_transaction(
-    seed: Seed, factory: async_sessionmaker[AsyncSession]
-) -> None:
-    service, _ = build(factory)
-    draft = ScheduleDraft(
-        kind=ScheduleKind.WEEKLY,
-        timezone="Europe/London",
-        time_of_day=time(9, 30),
-        weekdays=(1, 4),
-        start_date=date(2026, 3, 2),
+@pytest.fixture
+def clock() -> FakeClock:
+    return FakeClock(FIXED_NOW)
+
+
+@pytest.fixture
+def service(
+    factory: async_sessionmaker[AsyncSession], clock: FakeClock, broadcaster: FakeBroadcaster
+) -> PollService:
+    return PollService(
+        uow=lambda: unit_of_work(factory),
+        clock=clock,
+        broadcaster=broadcaster,  # type: ignore[arg-type]
     )
 
+
+async def test_create_persists_a_draft_and_audits(
+    service: PollService, factory: async_sessionmaker[AsyncSession]
+) -> None:
     created = await service.create(
-        actor_user_id=ADMIN_USER_ID,
-        question="  What should we ship next?  ",
-        options=OPTIONS,
-        target_chat_ids=(seed.chat_id,),
-        description="Pick one",
-        schedule=draft,
+        actor_user_id=100_000_001,
+        title="  Game  ",
+        options=["In", "Out"],
     )
 
-    assert created.poll.id is not None
-    assert created.poll.question == "What should we ship next?"
-    assert created.poll.options == OPTIONS
-    assert created.poll.targets == (seed.chat_id,)
-    assert created.schedule is not None
-    assert created.schedule.poll_id == created.poll.id
-    assert created.schedule.weekdays == (1, 4)
+    assert created.id is not None
+    assert created.status is PollStatus.DRAFT
+    async with session_scope(factory) as session:
+        from sqlalchemy import select
 
-    async with unit_of_work(factory) as repos:
-        stored = await repos.polls.get(created.poll.id)
-        schedules = await repos.schedules.list_all(poll_id=created.poll.id)
-        actions = [event.action for event in await repos.audit.list_recent(limit=10)]
+        from telegram_auto_poll.db.models import AuditEventRow
 
-    assert stored == created.poll
-    assert [schedule.id for schedule in schedules] == [created.schedule.id]
-    assert actions == [AuditAction.SCHEDULE_CREATE, AuditAction.POLL_CREATE]
+        audit = (await session.scalars(select(AuditEventRow))).all()
+    assert audit[0].action == "poll.create"
 
 
-async def test_create_without_a_schedule(
-    seed: Seed, factory: async_sessionmaker[AsyncSession]
-) -> None:
-    service, _ = build(factory)
-
-    created = await service.create(
-        actor_user_id=ADMIN_USER_ID,
-        question="Quick question",
-        options=("Yes", "No"),
-        target_chat_ids=(seed.chat_id,),
-    )
-
-    assert created.schedule is None
-    async with unit_of_work(factory) as repos:
-        assert await repos.schedules.count() == 1  # only the schedule created by the fixture
-        assert [event.action for event in await repos.audit.list_recent()] == [
-            AuditAction.POLL_CREATE
-        ]
-
-
-async def test_create_deduplicates_and_orders_targets(
-    seed: Seed, factory: async_sessionmaker[AsyncSession]
-) -> None:
-    async with unit_of_work(factory) as repos:
-        other = await repos.chats.upsert(
-            make_chat(id=None, telegram_chat_id=-1_001_234_567_899), now=FIXED_NOW
-        )
-        assert other.id is not None
-
-    service, _ = build(factory)
-    created = await service.create(
-        actor_user_id=ADMIN_USER_ID,
-        question="Two chats",
-        options=("A", "B"),
-        target_chat_ids=(other.id, seed.chat_id, other.id),
-    )
-
-    assert created.poll.targets == tuple(sorted({seed.chat_id, other.id}))
-
-
-async def test_create_requires_a_target(
-    seed: Seed, factory: async_sessionmaker[AsyncSession]
-) -> None:
-    service, _ = build(factory)
-
-    with pytest.raises(ValidationError) as exc_info:
-        await service.create(
-            actor_user_id=ADMIN_USER_ID,
-            question="No targets",
-            options=("A", "B"),
-            target_chat_ids=(),
-        )
-
-    assert exc_info.value.field == "targets"
-    async with unit_of_work(factory) as repos:
-        assert await repos.polls.count() == 1  # only the poll created by the fixture
-
-
-async def test_create_rejects_an_inactive_target(
-    seed: Seed, factory: async_sessionmaker[AsyncSession]
-) -> None:
-    async with unit_of_work(factory) as repos:
-        await repos.chats.set_active(seed.chat_id, active=False, now=FIXED_NOW)
-        other = await repos.chats.upsert(
-            make_chat(id=None, telegram_chat_id=-1_001_234_567_898), now=FIXED_NOW
-        )
-        assert other.id is not None
-    service, _ = build(factory)
-
-    with pytest.raises(ValidationError, match="inactive"):
-        await service.create(
-            actor_user_id=ADMIN_USER_ID,
-            question="Inactive target",
-            options=("A", "B"),
-            target_chat_ids=(other.id, seed.chat_id),
-        )
-
-
-async def test_create_rejects_invalid_options(
-    seed: Seed, factory: async_sessionmaker[AsyncSession]
-) -> None:
-    service, _ = build(factory)
-
-    with pytest.raises(ValidationError):
-        await service.create(
-            actor_user_id=ADMIN_USER_ID,
-            question="Only one option",
-            options=("Solo",),
-            target_chat_ids=(seed.chat_id,),
-        )
-
-    async with unit_of_work(factory) as repos:
-        assert await repos.polls.count() == 1  # only the poll created by the fixture
-
-
-async def test_a_failed_schedule_rolls_the_poll_back(
-    seed: Seed, factory: async_sessionmaker[AsyncSession]
-) -> None:
-    service, _ = build(factory)
-    past = FIXED_NOW - timedelta(minutes=1)
-    draft = ScheduleDraft(kind=ScheduleKind.ONCE, timezone="UTC", run_at=past)
-
-    with pytest.raises(ValidationError) as exc_info:
-        await service.create(
-            actor_user_id=ADMIN_USER_ID,
-            question="Atomic",
-            options=("A", "B"),
-            target_chat_ids=(seed.chat_id,),
-            schedule=draft,
-        )
-
-    assert exc_info.value.field == "run_at"
-    async with unit_of_work(factory) as repos:
-        assert await repos.polls.count() == 1  # the candidate poll was rolled back
-        assert await repos.audit.list_recent() == []
-
-
-async def test_page_paginates_poll_summaries(
-    seed: Seed, factory: async_sessionmaker[AsyncSession]
-) -> None:
-    async with unit_of_work(factory) as repos:
-        for index in range(8):
-            await repos.polls.add(
-                make_poll(id=None, question=f"Poll {index}", targets=()), now=FIXED_NOW
-            )
-    service, _ = build(factory)
-
-    first = await service.page(1)
-    second = await service.page(2)
-
-    assert first.total == 9
-    assert len(first.items) == 8
-    assert first.pages == 2
-    assert second.has_next is False
-    assert len(second.items) == 1
-
-
-async def test_page_can_include_archived_polls(
-    seed: Seed, factory: async_sessionmaker[AsyncSession]
-) -> None:
-    async with unit_of_work(factory) as repos:
-        await repos.polls.set_active(seed.poll_id, active=False, now=FIXED_NOW)
-    service, _ = build(factory)
-
-    active = await service.page(1)
-    everything = await service.page(1, active_only=False)
-
-    assert active.total == 0
-    assert everything.total == 1
-
-
-async def test_detail_reports_schedules_and_next_runs(
-    seed: Seed, factory: async_sessionmaker[AsyncSession]
-) -> None:
-    service, _ = build(factory)
-
-    detail = await service.detail(seed.poll_id)
-
-    assert detail.poll.id == seed.poll_id
-    assert len(detail.schedules) == 1
-    assert len(detail.schedules[0].next_runs) == 5
-    assert detail.schedules[0].next_runs == tuple(sorted(detail.schedules[0].next_runs))
-
-
-async def test_detail_hides_runs_of_a_paused_schedule(
-    seed: Seed, factory: async_sessionmaker[AsyncSession]
-) -> None:
-    async with unit_of_work(factory) as repos:
-        await repos.schedules.set_paused(
-            seed.schedule_id, paused=True, next_run_at=None, now=FIXED_NOW
-        )
-    service, _ = build(factory)
-
-    detail = await service.detail(seed.poll_id)
-
-    assert detail.schedules[0].next_runs == ()
-
-
-async def test_detail_reports_a_missing_poll(
+async def test_page_and_detail_expose_counts(
+    service: PollService,
+    seed: Seed,
     factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    service, _ = build(factory)
+    async with session_scope(factory) as session:
+        await PollResponseRepository(session).toggle(
+            instance_id=seed.instance_id,
+            option_id=seed.poll.options[0].id or 0,
+            telegram_user_id=1,
+            first_name="Alice",
+            now=FIXED_NOW,
+        )
 
-    with pytest.raises(NotFoundError, match="does not exist"):
-        await service.detail(404)
+    page = await service.page(1)
+    detail = await service.detail(seed.poll_id)
+
+    assert page.total == 1
+    assert page.items[0].response_count == 1
+    assert detail.total_respondents == 1
+    assert detail.counts[seed.poll.options[0].id or 0] == 1
 
 
-async def test_next_run_uses_the_injected_clock(
-    seed: Seed, factory: async_sessionmaker[AsyncSession]
+async def test_detail_unknown_poll_raises(service: PollService) -> None:
+    with pytest.raises(NotFoundError):
+        await service.detail(999)
+
+
+async def test_close_reopen_and_refresh(
+    service: PollService,
+    seed: Seed,
+    factory: async_sessionmaker[AsyncSession],
+    broadcaster: FakeBroadcaster,
 ) -> None:
-    clock = FakeClock(FIXED_NOW)
-    service, _ = build(factory, clock)
+    closed = await service.close(seed.poll_id, actor_user_id=1)
+    assert closed.status is InstanceStatus.CLOSED
+    assert broadcaster.refreshed == [seed.instance_id]
 
-    first = await service.next_run(seed.schedule)
-    assert first == FIXED_NOW.replace(hour=9, minute=0) + timedelta(days=1)
+    reopened = await service.reopen(seed.poll_id, actor_user_id=1)
+    assert reopened.status is InstanceStatus.OPEN
 
-    clock.set(FIXED_NOW + timedelta(days=30))
-    later = await service.next_run(seed.schedule)
+    async with session_scope(factory) as session:
+        await PollMessageRepository(session).mark_failed(
+            seed.message_id, "bad_request", now=FIXED_NOW
+        )
+    refreshed = await service.refresh(seed.poll_id, actor_user_id=1)
+    assert refreshed.retried == 1
+    assert refreshed.broadcast.edited == 1
 
-    assert later is not None
-    assert later > FIXED_NOW + timedelta(days=30)
+
+async def test_close_without_open_instance_raises(service: PollService, seed: Seed) -> None:
+    await service.close(seed.poll_id, actor_user_id=1)
+    with pytest.raises(NotFoundError):
+        await service.close(seed.poll_id, actor_user_id=1)
+
+
+async def test_reopen_without_closed_instance_raises(service: PollService, seed: Seed) -> None:
+    with pytest.raises(NotFoundError):
+        await service.reopen(seed.poll_id, actor_user_id=1)
+
+
+async def test_delete_removes_responses_and_redacts(
+    service: PollService,
+    seed: Seed,
+    factory: async_sessionmaker[AsyncSession],
+    broadcaster: FakeBroadcaster,
+) -> None:
+    async with session_scope(factory) as session:
+        await PollResponseRepository(session).toggle(
+            instance_id=seed.instance_id,
+            option_id=seed.poll.options[0].id or 0,
+            telegram_user_id=1,
+            first_name="Alice",
+            now=FIXED_NOW,
+        )
+
+    result = await service.delete(seed.poll_id, actor_user_id=1)
+
+    assert result.edited == 1
+    assert broadcaster.redacted == [seed.instance_id]
+    with pytest.raises(NotFoundError):
+        await service.detail(seed.poll_id)
+
+
+async def test_responses_paginates_and_validates(
+    service: PollService,
+    seed: Seed,
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_scope(factory) as session:
+        repo = PollResponseRepository(session)
+        for index in range(45):
+            await repo.toggle(
+                instance_id=seed.instance_id,
+                option_id=seed.poll.options[0].id or 0,
+                telegram_user_id=index + 1,
+                first_name=f"Name {index}",
+                now=FIXED_NOW,
+            )
+
+    first = await service.responses(seed.poll_id, option_position=1, page=1)
+    third = await service.responses(seed.poll_id, option_position=1, page=3)
+
+    assert len(first.names) == 20
+    assert third.pages == 3
+    assert len(third.names) == 5
+    with pytest.raises(ValidationError, match="option must be between"):
+        await service.responses(seed.poll_id, option_position=9)
+    with pytest.raises(ValidationError, match="page must be between"):
+        await service.responses(seed.poll_id, option_position=1, page=9)
+
+
+async def test_responses_requires_a_published_poll(
+    service: PollService,
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    created = await service.create(actor_user_id=1, title="Draft", options=["In"])
+    with pytest.raises(NotFoundError):
+        await service.responses(created.id or 0)

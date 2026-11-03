@@ -40,8 +40,8 @@ history, ticket, or chat.
    ```
 5. In Telegram, each admin opens a **DM** with the bot and presses **Start**.
 6. Verify `/status` and `/version` from an allowlisted admin.
-7. Register a staging chat with `/addchat`, create a test poll, and `/sendnow` it. Confirm the poll
-   arrives exactly once.
+7. Register a staging chat with `/addchat`, create a test poll with `/newpoll`, and `/publish` it.
+   Confirm the poll arrives once and that a second account can add its name.
 8. Enable the host backup cron (§7) and the external health probe before adding production chats.
 
 **Rollback:** stop the container, fix `.env`, and start again. No data is written before a successful
@@ -63,8 +63,8 @@ startup.
    curl -fsS http://127.0.0.1:8080/healthz
    docker compose logs --since=5m bot | grep -E 'startup_complete|migration|ERROR'
    ```
-5. DM `/status`; confirm the version matches the tag and the next runs are correct.
-6. Send a test poll to a staging chat if the change touches delivery.
+5. DM `/status`; confirm the version matches the tag and the counts are correct.
+6. Send a test sign-up poll to a staging chat if the change touches delivery.
 
 Do not use `latest` in production. Pin the immutable `vX.Y.Z` tag in Compose.
 
@@ -88,9 +88,9 @@ Do not attempt a downgrade migration.
 |---|---|---|
 | Container | `docker compose ps` | `healthy` |
 | Liveness | `curl -fsS http://127.0.0.1:8080/livez` | 200 `{"status":"ok"}` |
-| Readiness | `curl -fsS http://127.0.0.1:8080/healthz` | 200, DB and scheduler ok |
+| Readiness | `curl -fsS http://127.0.0.1:8080/healthz` | 200, DB and posting worker ok |
 | Metrics | `curl -fsS http://127.0.0.1:8080/metrics` | Prometheus text |
-| Bot | DM `/status` | version, counts, next runs |
+| Bot | DM `/status` | version, counts, recent failures |
 | Logs | `docker compose logs --tail=200 bot` | no traceback, no token |
 
 A 503 from `/healthz` includes a reason list. Do not restart blindly; read the reason first.
@@ -100,7 +100,7 @@ A 503 from `/healthz` includes a reason list. Do not restart blindly; read the r
 ```bash
 docker compose logs -f --tail=100 bot
 docker compose logs --since=1h bot | grep '"level":"ERROR"'
-docker compose logs --since=1h bot | grep delivery_id
+docker compose logs --since=1h bot | grep -E "message_id|instance_id"
 ```
 
 Logs are JSON on stdout and rotated by the Docker `json-file` driver (10 MB × 3). For longer retention,
@@ -112,7 +112,7 @@ increases volume and may include sensitive operational context.
 Scrape `127.0.0.1:8080/metrics` from the host or a local Prometheus. Minimum alerts:
 
 - `/healthz` non-200 for 5 minutes.
-- `tap_scheduler_heartbeat_age_seconds > 45` for 2 minutes.
+- `tap_worker_heartbeat_age_seconds > 45` for 2 minutes.
 - Any increase in `tap_send_failures_total{reason="exhausted"}`.
 - Disk usage > 80%.
 - No successful backup in 26 hours.
@@ -168,7 +168,7 @@ find "$DEST" -name 'telegram-auto-poll-*.db' -mtime +14 -delete
    docker compose up -d bot
    curl -fsS http://127.0.0.1:8080/healthz
    ```
-6. DM `/status`; confirm counts and next runs. Send a test poll to staging.
+6. DM `/status`; confirm counts and recent failures. Send a test sign-up poll to staging.
 7. Record the restore, backup date, and data-loss window in the incident log.
 
 ## 9. Rotate the bot token
@@ -199,17 +199,17 @@ Symptoms: an admin gets “This bot is private.” or no response.
 
 ## 11. Bot removed from a chat
 
-Symptoms: delivery fails with a non-retryable permission/`chat not found` error; admins receive an alert.
+Symptoms: a post fails with a non-retryable permission/`chat not found` error; admins receive an alert.
 
 1. Re-add the bot to the group/channel.
 2. For channels, grant administrator with “Post messages”.
 3. In DM, `/chats`, select the chat, and reactivate it if it was deactivated.
-4. `/resend <delivery_id>` the failed delivery after confirmation.
-5. Confirm the next scheduled run.
+4. `/refresh <poll_id>` to retry failed messages and re-render the latest instance.
+5. Confirm the message appears and votes are accepted.
 
-## 12. Scheduler stalled
+## 12. Posting worker stalled
 
-Symptoms: `/healthz` 503 with a scheduler heartbeat reason; no polls are sent.
+Symptoms: `/healthz` 503 with a worker heartbeat reason; pending posts are not sent.
 
 1. Check logs for a blocked event loop, a long DB transaction, or repeated Telegram timeouts.
 2. Check disk and DB health:
@@ -219,8 +219,7 @@ Symptoms: `/healthz` 503 with a scheduler heartbeat reason; no polls are sent.
    ```
 3. If the process is wedged, `docker compose restart bot`.
 4. Verify the heartbeat metric and `/healthz`.
-5. Inspect pending deliveries and next runs via `/status`; do not manually replay a backlog unless the
-   occurrence is within the grace window.
+5. Inspect pending messages and failures via `/status`; use `/refresh` to retry a specific poll.
 
 ## 13. Migration failure
 
@@ -229,8 +228,11 @@ Symptoms: container exits non-zero during startup; logs show an Alembic error; n
 1. Do not delete the database.
 2. Inspect the pre-migration backup in `/data/backups/`.
 3. Read the migration error and the current `alembic_version`.
-4. If the release is faulty, redeploy the previous image (schema is expected to be backward-compatible).
-5. If the schema was partially migrated, restore the pre-migration backup and start the previous image.
+4. For migration `0002`, the old native-poll tables are dropped. The migration aborts if they
+   contain rows and `ALLOW_DESTRUCTIVE_MIGRATION` is false. Take a verified backup, set the flag to
+   `true` for that one run, and remove it afterwards.
+5. If the release is faulty, redeploy the previous image and restore the pre-migration backup; the
+   new schema is not readable by v0.1.0.
 6. Open an incident and add a regression test for the migration.
 
 ## 14. Database corruption
@@ -256,15 +258,15 @@ Symptoms: `SQLITE_CORRUPT`, failed `integrity_check`, or repeated I/O errors.
 
 1. Check `timedatectl` / `chronyc tracking` on the host.
 2. Fix NTP; restart the container only if the health check is failing.
-3. Review `tap_schedule_lag_seconds` and skipped occurrences around the drift window.
-4. Do not manually edit `next_run_at_utc` in the database; use pause/resume or edit the schedule.
+3. Review `tap_vote_to_edit_seconds` and `tap_message_edits_total` around the drift window.
+4. Do not manually edit message or instance rows in the database; use `/refresh` or `/publish`.
 
 ## 17. Restore drill (quarterly)
 
 - [ ] Pick the most recent off-host backup.
 - [ ] Restore into a staging volume or a temporary host.
 - [ ] Start the container with a staging bot token.
-- [ ] Verify `/healthz`, `/status`, poll/schedule counts, and a test poll.
+- [ ] Verify `/healthz`, `/status`, poll/instance counts, and a test sign-up poll.
 - [ ] Record the date, backup date, duration, and result below.
 
 | Date | Backup date | Duration | Result | Operator |
@@ -281,3 +283,29 @@ Symptoms: `SQLITE_CORRUPT`, failed `integrity_check`, or repeated I/O errors.
 6. Verify with `/status`, a test poll, and metrics.
 7. Write a blameless postmortem in `docs/incidents/` within five working days.
 8. Add a regression test or runbook change, and link it from the postmortem.
+
+
+## 19. Response deletion and retention
+
+Responses are personal data: a Telegram user ID, a first-name snapshot, and timestamps.
+
+1. A participant can remove their own name by tapping the option again.
+2. An admin can run `/deletepoll <id>` to soft-delete the poll, delete every response row, and edit
+   every posted message to “This poll was deleted.” with no keyboard.
+3. Closed/deleted instances are pruned after `RESPONSE_RETENTION_DAYS` (default 90). The retention
+   job attempts to redact the message first, then deletes the responses. Telegram copies already seen
+   by users cannot be recalled; state this limitation when handling a deletion request.
+4. Never copy responses into tickets, logs, or chat. Use `/status` for counts only.
+
+## 20. Upgrade from the native-poll release (v0.1.0 → v0.3.0-alpha)
+
+1. Take an ad-hoc backup (§7) and verify `PRAGMA integrity_check`.
+2. Confirm the old database has no polls, targets, schedules, or deliveries that must be preserved.
+   The migration aborts if any old table has rows and the flag is false.
+3. Set `ALLOW_DESTRUCTIVE_MIGRATION=true` in `.env` for one run.
+4. `docker compose pull bot && docker compose up -d bot`.
+5. Verify `/healthz`, `/status`, `/addchat`, `/newpoll`, `/publish`, a vote from a second account, and
+   `/deletepoll`.
+6. Remove `ALLOW_DESTRUCTIVE_MIGRATION` from `.env` and recreate the container.
+7. Scheduling is not available in v0.3.0-alpha; do not deploy it as a production replacement until
+   SPEC-004 (v0.4.0) restores scheduled posting.

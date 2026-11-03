@@ -40,7 +40,7 @@ class ConflictError(DomainError):
 
 
 class DeliveryError(DomainError):
-    """A send attempt failed, classified for the retry policy (FR-131)."""
+    """A send or edit attempt failed, classified for the retry policy (FR-333)."""
 
     def __init__(
         self,
@@ -54,3 +54,11 @@ class DeliveryError(DomainError):
         self.retryable = retryable
         self.retry_after = retry_after
         self.classification = classification or message
+
+
+class ResponseRejectedError(DomainError):
+    """A vote cannot be applied; the message is safe to show to the participant."""
+
+
+class PollClosedError(ResponseRejectedError):
+    """The instance is no longer open for votes."""

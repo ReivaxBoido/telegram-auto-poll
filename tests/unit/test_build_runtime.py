@@ -1,29 +1,26 @@
-"""Production wiring and runners (T-037)."""
+"""Runtime wiring and lifecycle (SPEC-003 §13)."""
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
-import pytest
+from aiohttp import web
 
 from telegram_auto_poll.app import (
     AiohttpHealthRunner,
     PtbPollingRunner,
+    Runtime,
     _BotNotifier,
     build_runtime,
 )
 from telegram_auto_poll.config import load_settings
-from telegram_auto_poll.db.engine import create_engine
-from telegram_auto_poll.db.migrate import current_revision
-from telegram_auto_poll.observability.health import create_health_app
-from telegram_auto_poll.observability.metrics import Metrics
 from tests.conftest import FAKE_BOT_TOKEN
-from tests.factories import FIXED_NOW
-from tests.fakes import FakeClock
 
 
-class FakeRunner:
+class FakePolling:
     def __init__(self) -> None:
         self.started = 0
         self.stopped = 0
@@ -35,173 +32,237 @@ class FakeRunner:
         self.stopped += 1
 
 
-def settings(tmp_path: Path) -> object:
+class FakeHealth:
+    def __init__(self) -> None:
+        self.started = 0
+        self.stopped = 0
+
+    async def start(self) -> None:
+        self.started += 1
+
+    async def stop(self) -> None:
+        self.stopped += 1
+
+
+def _settings(tmp_path: Path) -> object:
     return load_settings(
         {
             "TELEGRAM_BOT_TOKEN": FAKE_BOT_TOKEN,
             "ADMIN_USER_IDS": "100000001",
+            "DATA_DIR": str(tmp_path / "data"),
             "DATABASE_URL": f"sqlite+aiosqlite:///{tmp_path / 'db.sqlite'}",
-            "DATA_DIR": str(tmp_path),
         }
     )
 
 
-async def test_build_runtime_migrates_recovers_and_schedules(tmp_path: Path) -> None:
-    polling = FakeRunner()
-    health = FakeRunner()
-    runtime = build_runtime(
-        settings(tmp_path),
-        clock=FakeClock(FIXED_NOW),
+async def test_build_runtime_and_run_lifecycle(tmp_path: Path) -> None:
+    polling = FakePolling()
+    health = FakeHealth()
+    runtime = build_runtime(_settings(tmp_path), polling=polling, health=health)  # type: ignore[arg-type]
+    stop = asyncio.Event()
+    stop.set()
+
+    await runtime.run(stop)
+
+    assert polling.started == 1
+    assert polling.stopped == 1
+    assert health.started == 1
+    assert health.stopped == 1
+
+
+async def test_runtime_shutdown_is_idempotent_without_tasks() -> None:
+    polling = FakePolling()
+    health = FakeHealth()
+    runtime = Runtime(
+        scheduler=SimpleNamespace(start=lambda: None, shutdown=lambda: None),  # type: ignore[arg-type]
+        worker=SimpleNamespace(run=lambda stop: asyncio.sleep(0)),  # type: ignore[arg-type]
+        broadcaster=SimpleNamespace(run=lambda stop: asyncio.sleep(0)),  # type: ignore[arg-type]
         polling=polling,
-        health=health,  # type: ignore[arg-type]
+        health=health,
     )
-
-    await runtime.on_start()  # type: ignore[misc]
-    engine = create_engine(f"sqlite+aiosqlite:///{tmp_path / 'db.sqlite'}")
-    try:
-        assert await current_revision(engine) == "0001"
-    finally:
-        await engine.dispose()
-
-    await runtime.scheduler.start()  # type: ignore[attr-defined]
-    await runtime.scheduler.tick()  # type: ignore[attr-defined]
-    await runtime.scheduler._backend._run_tick()  # type: ignore[attr-defined]
-    await runtime.scheduler.shutdown()  # type: ignore[attr-defined]
-    await runtime.on_stop()  # type: ignore[misc]
-    assert health.started == 0
+    await runtime.shutdown()
+    assert polling.stopped == 1
 
 
-async def test_build_runtime_creates_the_production_runners(tmp_path: Path) -> None:
-    runtime = build_runtime(settings(tmp_path), clock=FakeClock(FIXED_NOW))  # type: ignore[arg-type]
+async def test_bot_notifier_alerts_every_admin_and_swallows_failures() -> None:
+    class Bot:
+        def __init__(self) -> None:
+            self.calls: list[int] = []
 
-    assert isinstance(runtime.polling, PtbPollingRunner)
-    assert isinstance(runtime.health, AiohttpHealthRunner)
-    await runtime.on_stop()  # type: ignore[misc]
-    await runtime.health.stop()
-    await runtime.health.stop()
+        async def send_message(self, chat_id: int, text: str) -> None:
+            self.calls.append(chat_id)
+            if chat_id == 2:
+                raise RuntimeError("blocked")
+
+    bot = Bot()
+    notifier = _BotNotifier(bot, frozenset({1, 2}))  # type: ignore[arg-type]
+    await notifier.notify_admins("alert")
+    assert bot.calls == [1, 2]
 
 
-async def test_the_ptb_runner_starts_and_stops_polling() -> None:
-    calls: list[str] = []
-
+async def test_ptb_polling_runner_start_and_stop() -> None:
     class Updater:
-        running = True
+        def __init__(self) -> None:
+            self.running = False
 
         async def start_polling(self) -> None:
-            calls.append("poll")
+            self.running = True
 
         async def stop(self) -> None:
-            calls.append("stop-poll")
+            self.running = False
 
     class Application:
-        updater = Updater()
-        running = True
+        def __init__(self) -> None:
+            self.updater = Updater()
+            self.running = False
 
         async def initialize(self) -> None:
-            calls.append("init")
+            pass
 
         async def start(self) -> None:
-            calls.append("start")
+            self.running = True
 
         async def stop(self) -> None:
-            calls.append("stop")
+            self.running = False
 
         async def shutdown(self) -> None:
-            calls.append("shutdown")
+            pass
+
+    application = Application()
+    runner = PtbPollingRunner(application)  # type: ignore[arg-type]
+    await runner.start()
+    assert application.running is True
+    await runner.stop()
+    assert application.running is False
+
+
+async def test_aiohttp_health_runner_binds_and_cleans_up() -> None:
+    runner = AiohttpHealthRunner(web.Application(), host="127.0.0.1", port=0)
+    await runner.start()
+    await runner.stop()
+
+
+async def test_ptb_polling_runner_without_updater_or_running_app() -> None:
+    class Application:
+        updater = None
+        running = False
+
+        async def initialize(self) -> None:
+            pass
+
+        async def start(self) -> None:
+            self.running = True
+
+        async def stop(self) -> None:
+            self.running = False
+
+        async def shutdown(self) -> None:
+            pass
 
     runner = PtbPollingRunner(Application())  # type: ignore[arg-type]
     await runner.start()
     await runner.stop()
 
-    assert calls == ["init", "start", "poll", "stop-poll", "stop", "shutdown"]
+
+async def test_aiohttp_health_runner_stop_before_start() -> None:
+    runner = AiohttpHealthRunner(web.Application(), host="127.0.0.1", port=0)
+    await runner.stop()
 
 
-async def test_the_ptb_runner_tolerates_a_disabled_updater() -> None:
-    application = SimpleNamespace(
-        updater=None,
-        running=False,
-        initialize=_async_noop,
-        start=_async_noop,
-        stop=_async_noop,
-        shutdown=_async_noop,
+async def test_runtime_timeout_cancels_tasks() -> None:
+    async def never(stop: asyncio.Event) -> None:
+        await asyncio.sleep(3600)
+
+    runtime = Runtime(
+        scheduler=SimpleNamespace(start=lambda: None, shutdown=lambda: None),  # type: ignore[arg-type]
+        worker=SimpleNamespace(run=never),  # type: ignore[arg-type]
+        broadcaster=SimpleNamespace(run=never),  # type: ignore[arg-type]
+        polling=FakePolling(),
+        health=FakeHealth(),
+        shutdown_grace_seconds=0.01,
     )
-    runner = PtbPollingRunner(application)  # type: ignore[arg-type]
-
-    await runner.start()
-    await runner.stop()
-
-
-async def _async_noop() -> None:
-    return None
+    stop = asyncio.Event()
+    runtime._tasks = [asyncio.create_task(never(stop)), asyncio.create_task(never(stop))]
+    await runtime.shutdown()
+    assert all(task.cancelled() for task in runtime._tasks)
 
 
-async def test_bot_notifier_sends_to_every_admin(tmp_path: Path) -> None:
-    sent: list[tuple[int, str]] = []
+async def test_checkpoint_wal_runs(tmp_path: Path) -> None:
+    from telegram_auto_poll.app import _checkpoint_wal
+    from telegram_auto_poll.db.engine import create_engine
 
-    class Bot:
-        async def send_message(self, chat_id: int, text: str) -> None:
-            sent.append((chat_id, text))
-
-    notifier = _BotNotifier(Bot(), frozenset({1, 2}))
-    await notifier.notify_admins("alert")
-
-    assert sent == [(1, "alert"), (2, "alert")]
+    engine = create_engine(f"sqlite+aiosqlite:///{tmp_path / 'checkpoint.db'}")
+    await _checkpoint_wal(engine)
+    await engine.dispose()
 
 
-async def test_bot_notifier_swallows_and_logs_a_failure() -> None:
-    class Bot:
-        async def send_message(self, chat_id: int, text: str) -> None:
-            raise RuntimeError("forbidden")
+async def test_build_runtime_without_overrides_and_retention_callback(tmp_path: Path) -> None:
+    from telegram_auto_poll.app import build_runtime
+    from telegram_auto_poll.scheduler.engine import RETENTION_JOB_ID
 
-    notifier = _BotNotifier(Bot(), frozenset({1}))
-    await notifier.notify_admins("alert")
-
-
-async def test_the_production_health_runner_starts_and_stops() -> None:
-    from telegram_auto_poll.observability.health import HealthService
-    from telegram_auto_poll.scheduler.engine import SchedulerHeartbeat
-
-    async def ok() -> bool:
-        return True
-
-    heartbeat = SchedulerHeartbeat()
-    heartbeat.beat()
-    app = create_health_app(
-        health=HealthService(database=ok, heartbeat=heartbeat, tick_seconds=15),
-        metrics=Metrics(),
-    )
-    runner = AiohttpHealthRunner(app, host="127.0.0.1", port=0)
-
-    await runner.start()
-    await runner.stop()
-    await runner.stop()
-
-
-async def test_main_returns_failure_when_startup_raises(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from telegram_auto_poll.app import main
-
-    def boom(settings: object) -> object:
-        raise RuntimeError("cannot start")
-
-    monkeypatch.setattr("telegram_auto_poll.app.build_runtime", boom)
-
-    assert main(settings(tmp_path)) == 1  # type: ignore[arg-type]
-
-
-async def test_the_retention_cron_runs_daily_at_0315_utc(tmp_path: Path) -> None:
-    runtime = build_runtime(settings(tmp_path), clock=FakeClock(FIXED_NOW))  # type: ignore[arg-type]
-    backend = runtime.scheduler._backend  # type: ignore[attr-defined]
-    job = backend._scheduler.get_job("retention-daily")
-
-    assert job is not None
-    trigger = str(job.trigger)
-    assert "hour='3'" in trigger
-    assert "minute='15'" in trigger
-    assert "retention-daily" not in backend.jobs()
-
+    runtime = build_runtime(_settings(tmp_path))  # type: ignore[arg-type]
     await runtime.on_start()  # type: ignore[misc]
-    await job.func()
+    await runtime.worker.tick()
+    job = runtime.scheduler._scheduler.get_job(RETENTION_JOB_ID)
+    assert job is not None
     await job.func()
     await runtime.on_stop()  # type: ignore[misc]
+
+
+def test_main_returns_failure_on_a_fatal_startup_error(tmp_path: Path, monkeypatch: Any) -> None:
+    from telegram_auto_poll import app as app_module
+
+    def boom(settings: object) -> object:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(app_module, "build_runtime", boom)
+    assert app_module.main(_settings(tmp_path)) == 1  # type: ignore[arg-type]
+
+
+async def test_ptb_polling_runner_stop_without_start() -> None:
+    class Application:
+        updater = None
+        running = False
+
+        async def shutdown(self) -> None:
+            pass
+
+    await PtbPollingRunner(Application()).stop()  # type: ignore[arg-type]
+
+
+async def test_runtime_run_without_on_start() -> None:
+    polling = FakePolling()
+    health = FakeHealth()
+
+    async def done(stop: asyncio.Event) -> None:
+        return None
+
+    runtime = Runtime(
+        scheduler=SimpleNamespace(start=lambda: None, shutdown=lambda: None),  # type: ignore[arg-type]
+        worker=SimpleNamespace(run=done),  # type: ignore[arg-type]
+        broadcaster=SimpleNamespace(run=done),  # type: ignore[arg-type]
+        polling=polling,
+        health=health,
+    )
+    stop = asyncio.Event()
+    stop.set()
+    await runtime.run(stop)
+    assert polling.started == 1
+
+
+def test_main_configures_logging(tmp_path: Path, monkeypatch: Any) -> None:
+    from telegram_auto_poll import app as app_module
+
+    called: dict[str, object] = {}
+
+    def capture(**kwargs: object) -> None:
+        called.update(kwargs)
+
+    async def run(stop: asyncio.Event) -> None:
+        return None
+
+    monkeypatch.setattr(app_module, "configure_logging", capture)
+    monkeypatch.setattr(app_module, "build_runtime", lambda settings: SimpleNamespace(run=run))
+    assert app_module.main(_settings(tmp_path)) == 0  # type: ignore[arg-type]
+    assert called["log_format"] == "json"
+    assert called["environment"] == "production"

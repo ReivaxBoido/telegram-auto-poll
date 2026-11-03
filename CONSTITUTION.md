@@ -3,13 +3,13 @@
 | Field | Value |
 |---|---|
 | Document | Project Constitution |
-| Version | 1.0.0 |
+| Version | 2.0.0 |
 | Status | Ratified |
-| Ratified on | 2026-10-31 |
+| Ratified on | 2026-11-02 |
 | Owner | Project maintainers |
 | Applies to | The entire repository, all branches, all contributors, and all AI agents |
 | Review cadence | Annually, and whenever an architectural or process decision changes |
-| Supersedes | None (initial ratification) |
+| Supersedes | 1.0.0 |
 
 > This document is the highest-authority engineering artifact in the repository. It defines what the
 > project is, how it is built, how quality is enforced, and how decisions are made. When this document
@@ -21,12 +21,13 @@
 
 | Question | Answer |
 |---|---|
-| What is it? | A private Telegram bot that publishes saved polls to configured groups and channels on a schedule. |
+| What is it? | A private Telegram bot that publishes CountMeIn-style sign-up polls to registered groups and channels. |
 | Admin interface | Telegram direct messages only, restricted by a numeric user-ID allowlist. No web UI. |
-| Polls | Many reusable regular polls: question 1–300 chars, optional description 0–1024, 2–12 options of 1–100; anonymous and multiple-answer flags. |
-| Schedules | Daily, weekly, monthly, and one-off; per-schedule IANA timezone, start/end dates, pause/resume. |
-| Delivery | At most once per occurrence per chat; bounded retries; missed runs skipped after a 120 s grace window. |
-| Stack | Python 3.12, `uv`, `python-telegram-bot`, APScheduler, SQLAlchemy 2.0 + SQLite (WAL), Alembic, `aiohttp`. |
+| Polls | Title 1–300 chars, 1–10 options of 1–100 chars, multi-select responses, first-name display. |
+| Participants | Any member of a target chat may add or remove their own name via inline buttons. |
+| Schedules | Deferred to SPEC-004; the v0.3.0-alpha milestone is manual-only. |
+| Delivery | At most once per instance per chat; bounded retries; admin alerts. |
+| Stack | Python 3.12, `uv`, `python-telegram-bot`, APScheduler (retention cron), SQLAlchemy 2.0 + SQLite (WAL), Alembic, `aiohttp`. |
 | Deployment | One Docker container on one VPS via Docker Compose. Exactly one replica. |
 | Quality | `ruff`, `mypy --strict`, `pytest` at 100% line and branch coverage, plus SAST, dependency, secret, and container scans. |
 | Process | The 17-step SDD workflow with four human gates (G1–G4) defined in §12. |
@@ -71,39 +72,78 @@ This is a *project constitution*, not a feature specification. It defines the mi
 domain rules, engineering standards, quality gates, and delivery process. Feature-level behavior is
 specified per feature under `specs/`, using the templates in `specs/templates/`.
 
+### 0.5 v2.0.0 CountMeIn amendment (normative)
+
+Version 2.0.0 replaces the native-poll product with **CountMeIn-style sign-up polls** and amends the
+rules below. Where this section and an earlier section disagree, this section wins. The full
+section-by-section proposal is `specs/003-countmein-core/constitution-amendment.md`.
+
+**Product.** An allowlisted admin creates a poll with a title (1–300 characters) and 1–10 options
+(each 1–100 characters) in a DM, then publishes it to registered chats. Any member of a target chat
+taps an option to add or remove their own first name. Responses are multi-select and global to a poll
+**instance**; every message for that instance shows the same list. The bot edits messages live.
+
+**Data.** The bot stores only the minimum respondent data: Telegram user ID, a first-name snapshot,
+and timestamps. It does not store usernames, last names, native poll results, or vote history beyond
+the current response set. C-7 is replaced by this rule. The tables are `polls`, `poll_options`,
+`poll_instances`, `poll_messages`, and `poll_responses`; `chats` and `audit_events` are retained.
+
+**Authorization.** Admin commands and admin callbacks remain private-chat + allowlist. Vote callbacks
+are accepted from any member of a target chat and are validated against the stored message, open
+instance, and option; callback data is never identity. A forged vote can change only the sender's own
+response. See ADR-0004.
+
+**Delivery.** The posting worker sends `sendMessage` and the broadcaster edits with
+`editMessageText`. Native `sendPoll` is removed. Publishing is at-most-once per instance/chat, with
+bounded retries and one admin alert per terminal failure.
+
+**Scheduling.** SPEC-003 ships manual publishing and a worker heartbeat only. SPEC-004 restores
+due-schedule evaluation and the schedule commands on the same instance/message model.
+
+**Retention.** Responses for open instances are never pruned. Closed/deleted instances are redacted
+and pruned after `RESPONSE_RETENTION_DAYS` (default 90); messages and audit rows after
+`RETENTION_DAYS` (default 90).
+
+**Superseded sections.** For v2.0.0, the native-poll parts of §1.2, §5.1–§5.4, §6.4–§6.5,
+§7.2–§7.3, §10.5, §11.4, §16.3, and §21 are read through this section. §6.1, §6.2, §6.7, §7.4,
+§10.5, §16.3, §21, §22.4, and §22.6 are updated directly in this document.
+
 ---
 
 ## 1. Mission, scope, and non-goals
 
 ### 1.1 Mission
 
-**`telegram-auto-poll` is a private Telegram bot that publishes native Telegram polls to configured
-groups and channels at predetermined recurring or one-off times.** Administrators manage polls,
-schedules, and target chats entirely through direct messages with the bot; no web interface exists.
+**`telegram-auto-poll` is a private Telegram bot that publishes CountMeIn-style sign-up polls to
+configured groups and channels.** An administrator creates a poll with a title and 1–10 options and
+publishes it to registered chats. Members of those chats tap an option to add or remove their own
+name; the bot edits the message so everyone sees the current list and count. Administrators manage
+polls and chats entirely through direct messages; no web interface exists. From SPEC-004, a poll may
+also be published automatically at recurring intervals.
 
 The project must be small, dependable, auditable, and operable by one person on a single VPS. A poll
-that is due must be delivered once, on time, to every configured target — and the operator must be
-able to see exactly what happened.
+instance must be posted once per target chat, its responses must stay current, and the operator must
+be able to see exactly what happened.
 
 ### 1.2 In scope (v1)
 
 1. Telegram only, one bot token, one deployment.
-2. Native **regular** polls (not quizzes) with:
-   - a question (1–300 characters),
-   - an optional description (0–1024 characters),
-   - 2–12 answer options (each 1–100 characters),
-   - configurable anonymity (default: anonymous),
-   - configurable multiple answers (default: single answer).
-3. Many independent polls, each with its own options, flags, target chats, and schedules.
-4. Recurring schedules: daily, weekly (selected ISO weekdays), monthly (day of month), and one-off
-   datetimes. Multiple schedules per poll.
-5. Per-schedule IANA timezone, start date, optional end date, pause/resume.
-6. Delivery to multiple registered groups/supergroups/channels.
+2. CountMeIn-style sign-up polls:
+   - a title (1–300 characters);
+   - 1–10 options (each 1–100 characters, unique after trimming and case folding);
+   - multi-select responses;
+   - first-name display only;
+   - one button per option.
+3. Any member of a target chat may toggle their own response; responses are global to a poll instance.
+4. Manual publishing to one or more registered groups, supergroups, or channels.
+5. Close, reopen, refresh, and delete; deletion removes responses and redacts messages.
+6. Scheduled posting (SPEC-004): daily, weekly, monthly, and one-off occurrences, per-schedule IANA
+   timezone, start/end dates, pause/resume.
 7. Admin access via a Telegram user-ID allowlist supplied through environment variables.
 8. Admin command interface with guided inline-keyboard wizards and shortcuts.
 9. Chat registration by forwarding a message or pasting a chat ID.
-10. Idempotent delivery, bounded retries, missed-run handling, and admin alerts.
-11. Delivery and audit history, structured logs, health and Prometheus metrics endpoints.
+10. Idempotent posting, bounded retries, missed-run handling, and admin alerts.
+11. Response, message, and audit retention; structured logs; health and Prometheus metrics endpoints.
 12. Docker image and Docker Compose deployment on a single VPS.
 13. 100% line and branch test coverage of application code, strict typing, and automated security checks.
 
@@ -113,9 +153,11 @@ These are deliberately deferred. They **MUST NOT** be added without a spec, an A
 amendment where relevant.
 
 - Web UI, REST API, or any browser-based administration.
-- Quiz polls, media-attached polls, photo polls, poll results ingestion, or vote analytics.
-- Open-period/close-date automation, shuffle options, revoting, country restrictions, or member-only polls.
-- Per-chat schedules (v1 schedules apply to all active targets of a poll).
+- Native Telegram polls (`sendPoll`), quizzes, media polls, poll results ingestion, or vote analytics.
+- Capacity limits, waitlists, payments, ticketing, or calendar integrations.
+- Per-chat response isolation (responses are global per instance; a future spec may add isolation).
+- Editing a poll title or options after creation (SPEC-005).
+- Inline mode (SPEC-005).
 - Multiple bot tokens, multi-tenant operation, or multiple simultaneous deployments.
 - Horizontal scaling, multiple replicas, PostgreSQL, Redis, or an external job queue.
 - Platforms other than Telegram (Discord, Slack, WhatsApp, etc.).
@@ -136,7 +178,7 @@ These constraints are architectural, not preferences:
 | C-4 | Long polling, not webhooks. | No public domain, TLS termination, or ingress is required. |
 | C-5 | The application runs as a single asyncio process. | Simplicity, shared in-memory state, one migration owner. |
 | C-6 | All times are stored as UTC instants; schedules carry an IANA timezone. | Correctness across DST and host timezone changes. |
-| C-7 | The bot never reads or stores individual votes. | Privacy by design; Telegram owns poll results. |
+| C-7 | The bot stores only the minimum respondent data needed for sign-up polls: Telegram user ID, a first-name snapshot, and timestamps. It never stores usernames, last names, native poll results, or vote history beyond the current response set. | Privacy by design; CountMeIn parity requires names, but no more than necessary. |
 
 Capacity target: up to **50 registered chats**, **200 polls**, **1,000 schedules**, and **500 deliveries
 per day**, with a database under 100 MB.
@@ -411,6 +453,11 @@ configuration implements it.
 ---
 
 ## 5. Domain model and invariants
+
+> **v2.0.0 note.** The native-poll model in §5.1–§5.4 is superseded by §0.5 and
+> `specs/003-countmein-core/spec.md` §7. The current tables are `polls`, `poll_options`,
+> `poll_instances`, `poll_messages`, and `poll_responses`; `chats` and `audit_events` are retained.
+> The invariants are I-16–I-30 in the spec and must be asserted by tests.
 
 ### 5.1 Entity relationships
 
@@ -690,24 +737,28 @@ Priority: **P0** = release blocker, **P1** = required for v1, **P2** = should-ha
 
 - The allowlist is `ADMIN_USER_IDS`, a comma-separated list of positive Telegram user IDs. It is parsed
   at startup; invalid or empty values abort startup.
-- The bot accepts admin commands only when `update.effective_chat.type == "private"` and
-  `update.effective_user.id` is in the allowlist.
-- Non-allowlisted users receive a single generic reply: “This bot is private.” The bot does not reveal
-  the allowlist, poll data, or command help.
-- Commands in groups, supergroups, and channels are ignored. The bot never responds there. Scheduled
-  polls are the only messages it posts to target chats.
-- Callback queries are authorized with the same allowlist check against `callback.from_user.id`.
-  Callback data is never trusted as proof of identity.
+- Admin commands and admin callbacks (`p`, `t`, `w`, `c`) are accepted only when
+  `update.effective_chat.type == "private"` and `update.effective_user.id` is in the allowlist.
+- Vote callbacks (`v`) are accepted from any member of a target chat. They are validated against the
+  stored `poll_messages` row, the open instance, and the option; callback data is never identity. A
+  forged callback can change only the sender's own response.
+- Non-allowlisted users receive a single generic reply in DM: “This bot is private.” The bot does not
+  reveal the allowlist, poll data, or command help.
+- Commands in groups, supergroups, and channels are ignored. The bot never responds there. Poll
+  messages and their edits are the only messages it posts to target chats.
+- Callback queries are authorized with the same rules: admin namespaces re-check the allowlist and
+  private chat; the vote namespace re-checks the stored message/instance/option.
 - If an allowlisted admin has never started a private chat with the bot, Telegram will not allow the bot
   to message them. The README and runbook instruct admins to press **Start** once.
 - Admin lockout recovery: update `ADMIN_USER_IDS`, restart the container, and verify with `/status`.
   This procedure must be in the runbook.
 
-### 6.2 Command rate limiting
+### 6.2 Command and vote rate limiting
 
 - A per-admin in-memory token bucket limits commands to `ADMIN_COMMANDS_PER_MINUTE` (default 20).
-- `/sendnow` and `/resend` have a separate limit of 5 per minute per admin.
-- When limited, the bot replies once with the retry-after seconds and does not process the command.
+- A separate per-user in-memory token bucket limits votes to `VOTES_PER_MINUTE` (default 30).
+- When limited, the bot replies once with the retry-after seconds and does not process the command or
+  vote.
 - Rate-limit state is intentionally ephemeral and resets on restart.
 
 ### 6.3 Target chat registration
@@ -734,6 +785,11 @@ Priority: **P0** = release blocker, **P1** = required for v1, **P2** = should-ha
 
 ### 6.4 Poll management
 
+> **v2.0.0 note.** The commands and flows are `/newpoll`, `/polls`, `/poll`, `/publish`, `/close`,
+> `/reopen`, `/refresh`, `/responses`, `/deletepoll`, and `/cancel`. Poll creation validates the title
+> and 1–10 options; publishing creates an instance and messages; closing/reopening edits messages;
+> deletion removes responses and redacts messages. Editing title/options is SPEC-005.
+
 - `/newpoll` runs the wizard in §7.3.
 - Validation follows I-1 and I-2. Invalid input re-prompts with the specific constraint and the current
   step; it does not discard earlier answers.
@@ -753,6 +809,10 @@ Priority: **P0** = release blocker, **P1** = required for v1, **P2** = should-ha
   admin resumes them.
 
 ### 6.5 Scheduled delivery
+
+> **v2.0.0 note.** SPEC-003 uses a posting worker that sends `sendMessage` and a broadcaster that
+> edits messages. At-most-once is enforced per instance/chat; retries, skips, and alerts are described
+> in `specs/003-countmein-core/spec.md` §5.5. Due-schedule evaluation returns in SPEC-004.
 
 1. The scheduler wakes on the earliest `next_run_at_utc` and at least every
    `SCHEDULER_TICK_SECONDS` (default 15) as a safety net.
@@ -841,9 +901,13 @@ Priority: **P0** = release blocker, **P1** = required for v1, **P2** = should-ha
 
 ### 6.7 Retention
 
-- A daily maintenance job at 03:15 UTC deletes `deliveries` and `audit_events` older than
-  `RETENTION_DAYS` (default 90) in batches of 1,000, then runs `PRAGMA wal_checkpoint(TRUNCATE)`.
-- Poll, schedule, and chat definitions are never pruned automatically.
+- A daily maintenance job at 03:15 UTC redacts and deletes responses for closed/deleted instances
+  older than `RESPONSE_RETENTION_DAYS` (default 90), then deletes `poll_messages` and `audit_events`
+  older than `RETENTION_DAYS` (default 90) in batches of 1,000, then runs
+  `PRAGMA wal_checkpoint(TRUNCATE)`.
+- Open instances are never pruned. Poll and option definitions are retained until the poll is deleted.
+- `/deletepoll` deletes responses immediately and redacts messages; the retention job is the fallback
+  for closed instances that were never deleted.
 - The job logs the number of deleted rows and the duration. It is safe to run multiple times.
 
 ### 6.8 Error handling and admin notifications
@@ -878,30 +942,32 @@ Priority: **P0** = release blocker, **P1** = required for v1, **P2** = should-ha
 | Command | Purpose |
 |---|---|
 | `/start` | Identify the admin, show a short menu, and confirm authorization. |
-| `/help` | List commands and explain the wizard/shortcut model. |
+| `/help` | List commands and explain the sign-up model. |
 | `/version` | Show application version, build SHA, and start time. |
-| `/status` | Show health, counts, next runs, and recent failures. |
-| `/polls [page]` | Paginated poll list with status and next run. |
+| `/status` | Show health, counts, and recent failures. |
+| `/polls [page]` | Paginated poll list with status and latest instance. |
 | `/poll <id>` | Poll detail with inline actions. |
 | `/newpoll` | Start the poll creation wizard. |
+| `/publish <id>` | Select target chats and publish a new instance. |
+| `/close <id>` | Close the latest open instance. |
+| `/reopen <id>` | Reopen the latest closed instance. |
+| `/refresh <id>` | Re-render messages and retry failed posts. |
+| `/responses <id> [option] [page]` | Full name list per option, paginated. |
+| `/deletepoll <id>` | Soft-delete, remove responses, and redact messages. |
 | `/chats [page]` | Paginated registered chats. |
 | `/addchat` | Register a chat by forwarded message or numeric ID. |
 | `/removechat <id>` | Deactivate a chat after confirmation. |
-| `/schedules [poll_id] [page]` | Paginated schedules, optionally filtered by poll. |
-| `/schedule <id>` | Schedule detail with next five occurrences and actions. |
-| `/pause <schedule_id>` | Pause a schedule. |
-| `/resume <schedule_id>` | Resume a schedule and recompute its next run. |
-| `/delete_schedule <schedule_id>` | Delete a schedule after confirmation. |
-| `/sendnow <poll_id>` | Send a poll immediately after confirmation. |
-| `/resend <delivery_id>` | Create a new manual delivery for a failed delivery after confirmation. |
-| `/archive <poll_id>` | Archive a poll and pause its schedules. |
-| `/unarchive <poll_id>` | Unarchive a poll (schedules remain paused). |
 | `/cancel` | Cancel the active wizard or confirmation. |
 
-Command names are lowercase and stable. Aliases are not added without an ADR, because they expand the
-test matrix and the help surface. Unknown commands receive a short `/help` hint.
+Scheduling commands (`/schedules`, `/schedule`, `/pause`, `/resume`, `/delete_schedule`) return in
+SPEC-004. Command names are lowercase and stable. Aliases are not added without an ADR, because they
+expand the test matrix and the help surface. Unknown commands receive a short `/help` hint.
 
 ### 7.3 Wizard flows
+
+> **v2.0.0 note.** The new-poll wizard is: title → options (typed, with **Remove last** / **Done**) →
+> preview → confirm. Publishing is a separate target-selection flow with 6 chats per page and a
+> confirmation. See `specs/003-countmein-core/spec.md` §8.2–§8.3.
 
 **New poll wizard**
 
@@ -929,11 +995,15 @@ to start again.
 ### 7.4 Callback data and pagination
 
 - Callback data is UTF-8 and **MUST NOT** exceed 64 bytes. Use a compact, versioned scheme:
-  `v1:<namespace>:<action>:<id>`, for example `v1:p:view:12`, `v1:s:pause:34`, `v1:w:opt:done`.
-- Callback handlers validate the actor, parse the version, and reject unknown namespaces without
-  mutating state.
-- List pages show at most 8 items. Pagination buttons carry the page number and filter; no cursor state
-  is stored server-side for read-only lists.
+  `v1:<namespace>:<action>[:<argument>]`, for example `v1:v:toggle:12_3`, `v1:p:close:12`,
+  `v1:w:option_remove:0`.
+- Namespaces: `v` (participant vote), `p` (admin poll action), `t` (publish target selection), `w`
+  (wizard), `c` (confirmation).
+- Handlers validate the actor, parse the version, and reject unknown namespaces or malformed data
+  without mutating state. Admin namespaces require private chat + allowlist; the vote namespace
+  validates the stored message, open instance, and option.
+- List pages show at most 8 items; the publish target selector shows 6 chats per page. Pagination
+  buttons carry the page number and filter; no cursor state is stored server-side for read-only lists.
 - A callback answer is always sent within 3 seconds; long work is acknowledged first.
 - Confirmations store the pending action in the wizard/confirmation state, not in callback data.
 
@@ -950,7 +1020,7 @@ to start again.
 - Telegram poll limits are enforced before sending: question 1–300, description 0–1024, options 2–12
   (API permits 1–12; this project requires at least 2), option text 1–100.
 - Admin text messages are capped at 4,096 characters; long lists are paginated or summarized.
-- Inline keyboards are limited to 8 rows by the UI guideline, with at most 4 buttons per row.
+- Admin keyboards are limited to 8 rows, with at most 4 buttons per row. The participant vote keyboard uses one row per option (up to 10 rows for 10 options) so every option is a full-width target.
 - Poll content is never truncated silently. If a value exceeds a limit, the wizard rejects it with the
   exact limit and the current length.
 
@@ -999,6 +1069,14 @@ value.
 | `CLOCK_SKEW_WARNING_SECONDS` | No | `60` | 1–3600; log a warning beyond this skew. |
 | `BOT_POLL_TIMEOUT_SECONDS` | No | `30` | 1–60; long-polling timeout. |
 | `WIZARD_TTL_SECONDS` | No | `900` | 60–3600; inactive wizard expiry. |
+| `RESPONSE_NAMES_PER_OPTION` | No | `50` | 1–50; names shown per option before `... +N more`. |
+| `RESPONSE_UPDATE_DEBOUNCE_SECONDS` | No | `1.0` | 0–10; coalesce vote edits. |
+| `VOTES_PER_MINUTE` | No | `30` | 1–120; per-user vote budget. |
+| `RESPONSE_RETENTION_DAYS` | No | `90` | 1–3650; closed/deleted response retention. |
+| `MESSAGE_EDIT_CONCURRENCY` | No | `4` | 1–20; bounded message-edit concurrency. |
+| `MESSAGE_EDIT_RETRY_ATTEMPTS` | No | `3` | 1–10; edit retry attempts. |
+| `POSTING_TICK_SECONDS` | No | `5` | 1–60; posting-worker wake-up interval. |
+| `ALLOW_DESTRUCTIVE_MIGRATION` | No | `false` | One-time guard for migration `0002`; set true only after a verified backup. |
 | `BUILD_VERSION` | No | `dev` | Injected at image build; shown by `/version`. |
 | `BUILD_SHA` | No | `unknown` | Injected at image build; shown by `/version`. |
 
@@ -1035,9 +1113,9 @@ them as OCI labels and environment values so `/version` matches the running imag
 | ID | Requirement | Target |
 |---|---|---|
 | NFR-1 | Delivery latency | p99 ≤ 30 s after the scheduled instant, and always within the 120 s grace window. |
-| NFR-2 | Duplicate deliveries | Zero for scheduled occurrences; enforced by a unique index. |
+| NFR-2 | Duplicate posts | Zero per instance/chat; enforced by a unique index. |
 | NFR-3 | Availability | 99.5% monthly for the bot process (single VPS; host maintenance excluded). |
-| NFR-4 | Capacity | 50 chats, 200 polls, 1,000 schedules, 500 deliveries/day, DB < 100 MB. |
+| NFR-4 | Capacity | 50 chats, 200 polls, 1,000 instances, 500 posts/day, 10,000 responses, DB < 100 MB. |
 | NFR-5 | Resource envelope | ≤ 256 MB RSS steady state; ≤ 0.25 vCPU average; image ≤ 250 MB compressed. |
 | NFR-6 | Startup | ≤ 15 s including migrations on the reference dataset, excluding image pull. |
 | NFR-7 | Admin responsiveness | p95 ≤ 2 s for read-only commands, excluding Telegram network time. |
@@ -1046,6 +1124,7 @@ them as OCI labels and environment values so `/version` matches the running imag
 | NFR-10 | Security | No critical or high vulnerability in runtime dependencies or the image at release time. |
 | NFR-11 | Maintainability | New contributor can run the test suite and the container from the README in ≤ 30 minutes. |
 | NFR-12 | Correctness | All schedule-math DST and month-boundary cases covered by tests (§11.4). |
+| NFR-13 | Vote-to-edit latency | p95 ≤ 2 s, p99 ≤ 5 s, excluding Telegram outages; measured by `tap_vote_to_edit_seconds`. |
 
 ### 9.1 Performance notes
 
@@ -1128,17 +1207,25 @@ them as OCI labels and environment values so `/version` matches the running imag
 
 ### 10.5 Privacy and data protection
 
-- The bot **MUST NOT** call `getPollResults`, `stopPoll`, or any method that reads individual votes.
-- Polls are anonymous by default. Non-anonymous polls are an explicit admin choice and are documented in
-  the UI.
-- Stored data is limited to chat metadata, poll definitions, schedules, delivery status, Telegram message
-  IDs, and audit events. No message bodies, user profiles, or voter identities are stored.
-- Delivery/audit retention is 90 days by default. Admins can archive polls and deactivate chats, which
-  removes them from active use while preserving historical integrity.
-- Backups contain chat IDs and poll content. They are stored with `0600` permissions, encrypted at rest
-  where the host supports it, and never committed or uploaded to public storage.
-- A deletion request is handled by archiving the poll, deactivating the chat, and letting retention
-  prune delivery/audit rows; the runbook records the procedure.
+- The bot **MUST NOT** call `getPollResults`, `stopPoll`, or any method that reads native poll votes.
+- For sign-up polls, the bot stores only the minimum respondent data: Telegram user ID, a first-name
+  snapshot, and timestamps. It does not store usernames, last names, native poll results, or vote
+  history beyond the current response set.
+- Responses are visible to everyone who can see the poll message and are global to the instance. A
+  name entered in one target chat is visible in every target chat for that instance; the publish
+  confirmation and runbook state this. Operators must publish only within one trust boundary.
+- Stored data is limited to chat metadata, poll definitions, instances, message state, Telegram
+  message IDs, responses, and audit events. No message bodies, user profiles, or voter identities
+  beyond the response snapshot are stored.
+- Open-instance responses are retained until the participant removes them or the poll is deleted.
+  Closed/deleted instances are redacted and pruned after `RESPONSE_RETENTION_DAYS` (default 90);
+  messages and audit rows after `RETENTION_DAYS` (default 90).
+- `/deletepoll` removes response rows immediately and edits messages to a redacted state. Telegram
+  copies already seen by users cannot be recalled; the runbook records this limitation.
+- Backups contain chat IDs, poll content, and responses. They are stored with `0600` permissions,
+  encrypted at rest where the host supports it, and never committed or uploaded to public storage.
+- A deletion request is handled with `/deletepoll` and the retention procedure; the runbook records
+  the steps and the Telegram-copy limitation.
 
 ### 10.6 Incident response
 
@@ -1198,6 +1285,10 @@ tests are a release smoke check, not the primary safety net.
   not merely execute lines. “Coverage theater” is a review failure.
 
 ### 11.4 Required test matrix
+
+> **v2.0.0 note.** The required matrix for sign-up polls is in
+> `specs/003-countmein-core/spec.md` §12 and covers validation, rendering, callback authorization,
+> toggling, coalescing, posting retries, migration guard, retention, deletion, and no names in logs.
 
 At minimum, the suite must cover:
 
@@ -1882,12 +1973,13 @@ applied centrally; tests assert that a known fake token never appears in capture
 | Endpoint | Semantics | Success | Failure |
 |---|---|---|---|
 | `/livez` | Process can serve HTTP. | 200 `{"status":"ok"}` | No response / 503. |
-| `/healthz` | Readiness: DB `SELECT 1` ≤ 1 s and scheduler heartbeat < 3 ticks. | 200 with component statuses | 503 with reasons. |
-| `/metrics` | Prometheus text exposition. | 200 | 503 if metrics disabled? Return 404 when disabled. |
+| `/healthz` | Readiness: DB `SELECT 1` ≤ 1 s and posting-worker heartbeat < 3 ticks. | 200 with component statuses | 503 with reasons. |
+| `/metrics` | Prometheus text exposition. | 200 | 404 when metrics are disabled. |
 
 `/healthz` must not block on Telegram. A bot polling outage is reported as a component status and a
-metric, but a temporary Telegram outage should not necessarily fail readiness; the scheduler can still
-run. Define: `/healthz` fails only on DB failure or scheduler stall.
+metric, but a temporary Telegram outage should not necessarily fail readiness; the posting worker can
+still run. Define: `/healthz` fails only on DB failure or worker stall. The scheduler heartbeat
+returns in SPEC-004.
 
 ### 16.3 Metrics catalog
 
@@ -1895,20 +1987,25 @@ run. Define: `/healthz` fails only on DB failure or scheduler stall.
 |---|---|---|---|
 | `tap_build_info` | gauge | `version`, `sha` | Exactly 1; joins dashboards to releases. |
 | `tap_startup_timestamp_seconds` | gauge | — | Process start time. |
-| `tap_scheduler_heartbeat_age_seconds` | gauge | — | Stall detection. |
-| `tap_scheduler_tick_duration_seconds` | histogram | — | Tick performance. |
-| `tap_schedules_active` | gauge | — | Capacity and load. |
-| `tap_deliveries_pending` | gauge | — | Backlog. |
-| `tap_polls_sent_total` | counter | `status` (`sent`/`failed`/`skipped`) | Delivery outcomes. |
-| `tap_send_failures_total` | counter | `reason` (`retryable`/`non_retryable`/`exhausted`) | Failure classification. |
-| `tap_send_duration_seconds` | histogram | — | Telegram latency. |
-| `tap_schedule_lag_seconds` | histogram | — | Actual send time minus scheduled time. |
-| `tap_admin_commands_total` | counter | `command`, `result` | Usage and abuse. |
+| `tap_worker_heartbeat_age_seconds` | gauge | — | Posting-worker stall detection. |
+| `tap_polls_total` | gauge | `status` | Poll definitions by status. |
+| `tap_poll_instances_open` | gauge | — | Open instances. |
+| `tap_poll_messages_total` | gauge | `status` | Message delivery states. |
+| `tap_votes_total` | counter | `action` (`added`/`removed`) | Accepted votes. |
+| `tap_vote_rejections_total` | counter | `reason` | Refused votes. |
+| `tap_message_edits_total` | counter | `status` | Edit outcomes. |
+| `tap_broadcast_coalesced_total` | counter | — | Render passes that edited at least one message. |
+| `tap_responses_active` | gauge | — | Current response rows. |
+| `tap_vote_to_edit_seconds` | histogram | — | Vote-to-visible-edit latency. |
+| `tap_response_retention_deleted_total` | counter | `kind` | Responses removed by retention. |
+| `tap_admin_commands_total` | counter | `command` | Usage and abuse. |
 | `tap_retention_deleted_rows_total` | counter | `table` | Retention health. |
+| `tap_send_duration_seconds` | histogram | — | Telegram send latency. |
 | `tap_db_up` | gauge | — | 1/0 database check. |
 | `tap_bot_polling_up` | gauge | — | 1/0 long-polling health. |
 
-Cardinality is bounded: no chat IDs, poll IDs, or user IDs in metric labels. Those belong in logs.
+Cardinality is bounded: no chat IDs, poll IDs, instance IDs, user IDs, or names in metric labels.
+Those belong in logs, and names/participant IDs must not be logged at all.
 
 ### 16.4 Alerts
 
@@ -2087,17 +2184,18 @@ These are explicitly **not** part of v1. Each requires a new spec and, where not
 | Term | Meaning |
 |---|---|
 | **Admin** | A Telegram user whose ID is in `ADMIN_USER_IDS` and who interacts with the bot in a private chat. |
-| **APScheduler job** | An in-memory wake-up derived from a database schedule; never the source of truth. |
-| **At-most-once** | A scheduled occurrence is delivered zero or one time per chat, never twice. |
+| **APScheduler job** | An in-memory wake-up derived from the database; never the source of truth. In SPEC-003 only the retention cron uses it. |
+| **At-most-once** | A message is posted zero or one time per instance and chat, never twice. |
+| **Broadcaster** | The component that coalesces vote events and edits every message for an instance. |
 | **Chat** | A registered Telegram group, supergroup, or channel that receives polls. |
 | **Clock port** | The injectable abstraction that supplies the current UTC instant; tests use a fake. |
-| **Delivery** | One attempt-series to send one poll to one chat for one occurrence. |
-| **Grace window** | The maximum lateness (`SEND_GRACE_SECONDS`) after which an occurrence is skipped. |
-| **Occurrence** | A single instant at which a schedule is due, computed in its IANA timezone. |
-| **Poll** | A reusable definition: question, description, options, anonymity, multiple-answer flag. |
+| **Coalescing** | Combining rapid vote toggles into one render/edit pass per debounce window. |
+| **Instance** | One publication/occurrence of a poll; responses belong to the instance. |
+| **Message** | One bot message for one instance/chat, with delivery state and a Telegram message ID. |
+| **Participant** | Any member of a target chat who presses a vote button; not necessarily an admin. |
+| **Poll** | A title plus 1–10 ordered options; not a native Telegram poll. |
 | **Port** | A `typing.Protocol` interface between layers, implemented by adapters or fakes. |
-| **Schedule** | A rule (daily/weekly/monthly/once) plus timezone and date bounds that produces occurrences. |
-| **Target** | A chat associated with a poll; scheduled sends go to every active target. |
+| **Response** | A user's membership in one option of one instance, with a first-name snapshot. |
 | **UTC instant** | An absolute point in time stored as Unix epoch seconds; independent of timezone. |
 | **Wizard** | A guided, multi-step Telegram conversation that commits only at final confirmation. |
 
@@ -2167,6 +2265,7 @@ person cannot be locked out by a mistake.
 | Version | Date | Change | Approved by |
 |---|---|---|---|
 | 1.0.0 | 2026-10-31 | Initial ratification. | Project maintainers (G2) |
+| 2.0.0 | 2026-11-02 | CountMeIn pivot: sign-up polls, minimal respondent storage, participant callbacks, new data model, retention, metrics, and the SPEC-003/004/005 roadmap. | @ReivaxBoido (G2) |
 
 ### 22.5 Gate record — constitution
 
@@ -2174,6 +2273,8 @@ person cannot be locked out by a mistake.
 |---|---|---|---|
 | G1 | Clarifications | Three rounds of targeted questions covering platform, admin UX, storage, scheduling, delivery, stack, deployment, testing, CI, observability, security, licensing, and process; answers are encoded throughout §1–§17. | 2026-10-31 |
 | G2 | Constitution v1.0.0 | Human approval message `gate 2 approved`; ratification recorded in this document and in `README.md` and `CHANGELOG.md`. | 2026-10-31 |
+| G1 | SPEC-003 clarifications | Q-1–Q-11 recorded in `specs/003-countmein-core/spec.md` §14 and issue #7. | 2026-11-02 |
+| G2 | Constitution v2.0.0 + SPEC-003 | Human approval: “gate 1 approved. gate 2 approved”; amendment and ADR-0003/0004 recorded. | 2026-11-02 |
 
 The G2 approval ratifies this constitution. Feature-level work still requires its own spec, plan, tasks,
 and a separate G2 approval per §12.2.
@@ -2184,6 +2285,8 @@ and a separate G2 approval per §12.2.
 |---|---|---|
 | [0001](docs/adr/0001-technology-stack.md) | Technology stack and runtime architecture | Accepted |
 | [0002](docs/adr/0002-telegram-only-admin-interface.md) | Telegram-only administration, no web UI | Accepted |
+| [0003](docs/adr/0003-countmein-product-pivot.md) | Product pivot to CountMeIn-style sign-up polls | Accepted |
+| [0004](docs/adr/0004-participant-callback-authorization.md) | Participant callback authorization for sign-up polls | Accepted |
 
 ---
 

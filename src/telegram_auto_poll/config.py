@@ -43,6 +43,14 @@ _HINTS: dict[str, str] = {
     "SEND_CONCURRENCY": "an integer of at least 1",
     "WIZARD_TTL_SECONDS": "an integer of at least 1",
     "RETENTION_DAYS": "an integer of at least 1",
+    "RESPONSE_NAMES_PER_OPTION": "an integer between 1 and 50",
+    "RESPONSE_UPDATE_DEBOUNCE_SECONDS": "a number between 0 and 10",
+    "VOTES_PER_MINUTE": "an integer between 1 and 120",
+    "RESPONSE_RETENTION_DAYS": "an integer between 1 and 3650",
+    "MESSAGE_EDIT_CONCURRENCY": "an integer between 1 and 20",
+    "MESSAGE_EDIT_RETRY_ATTEMPTS": "an integer between 1 and 10",
+    "POSTING_TICK_SECONDS": "an integer between 1 and 60",
+    "ALLOW_DESTRUCTIVE_MIGRATION": "true or false",
 }
 
 
@@ -93,6 +101,14 @@ class Settings(BaseSettings):
     wizard_ttl_seconds: int = Field(default=900, ge=1)
 
     retention_days: int = Field(default=90, ge=1)
+    response_names_per_option: int = Field(default=50, ge=1, le=50)
+    response_update_debounce_seconds: float = Field(default=1.0, ge=0, le=10)
+    votes_per_minute: int = Field(default=30, ge=1, le=120)
+    response_retention_days: int = Field(default=90, ge=1, le=3650)
+    message_edit_concurrency: int = Field(default=4, ge=1, le=20)
+    message_edit_retry_attempts: int = Field(default=3, ge=1, le=10)
+    posting_tick_seconds: int = Field(default=5, ge=1, le=60)
+    allow_destructive_migration: bool = False
     db_busy_timeout_ms: int = Field(default=5000, ge=0)
     shutdown_grace_seconds: int = Field(default=30, ge=0)
     migrate_on_startup: bool = True
