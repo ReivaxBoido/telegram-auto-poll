@@ -264,7 +264,7 @@ Order is dependency order. Check a task only when its acceptance check passes in
     approval recorded.
   - Covers: workflow §12.2 step 12.
 
-- [ ] **T-040** (ops) Open the PR, monitor CI, address comments, and merge only when authorized.
+- [x] **T-040** (ops) Open the PR, monitor CI, address comments, and merge only when authorized.
   - Files: PR
   - Acceptance: PR links issue #7 and the spec; CI green; branch deleted; issue updated.
   - Covers: workflow §12.2 steps 15–17.
@@ -277,4 +277,4 @@ Order is dependency order. Check a task only when its acceptance check passes in
 | 2026-11-02 | T-005–T-032 | Complete | Implementation and tests; 333 tests at 100% line and branch. |
 | 2026-11-02 | T-033–T-038 | Complete | Docs, Docker/CI, G3 approved, governance checks and risk acceptance. |
 | 2026-11-02 | T-039 | Complete | G4 approved. |
-| 2026-11-02 | T-040 | Pending | PR after G4. |
+| 2026-11-03 | T-040 | Complete | PR #9 merged (squash f81d012); branch deleted; issue #7 closed. |
